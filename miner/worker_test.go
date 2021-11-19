@@ -243,8 +243,8 @@ func testGenerateBlockAndImport(t *testing.T, eType int) {
 		engine = clique.New(chainConfig.Clique, db)
 	case enginePhenix:
 		chainConfig = params.AllPhenixProtocolChanges
-		chainConfig.Phenix = &params.PhenixConfig{Period: 1, Epoch: 30000, ShadeID: 1}
-		engine = phenix.New(chainConfig.Phenix, db)
+		chainConfig.Phenix = &params.PhenixConfig{Period: 1, Epoch: 5, ShadeID: 1}
+		engine = phenix.New(chainConfig, db)
 	}
 
 	chainConfig.LondonBlock = big.NewInt(0)
@@ -269,7 +269,7 @@ func testGenerateBlockAndImport(t *testing.T, eType int) {
 	// Start mining!
 	w.start()
 
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 15; i++ {
 		b.txPool.AddLocal(b.newRandomTx(true))
 		b.txPool.AddLocal(b.newRandomTx(false))
 		w.postSideBlock(core.ChainSideEvent{Block: b.newRandomUncle()})

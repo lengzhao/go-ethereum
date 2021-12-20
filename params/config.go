@@ -346,9 +346,10 @@ func (c *CliqueConfig) String() string {
 
 // PhenixConfig is the consensus engine configs for dpos based sealing.
 type PhenixConfig struct {
-	Period  uint64 `json:"period"` // Number of seconds between blocks to enforce
-	Epoch   uint64 `json:"epoch"`  // Epoch length to reset votes and checkpoint
-	ShadeID uint64 `json:"shade_id"`
+	Period     uint64 `json:"period"` // Number of seconds between blocks to enforce
+	Epoch      uint64 `json:"epoch"`  // Epoch length to reset votes and checkpoint
+	ShadeID    uint64 `json:"shade_id"`
+	RouterAddr string `json:"router_addr"`
 }
 
 // String implements the stringer interface, returning the consensus engine details.

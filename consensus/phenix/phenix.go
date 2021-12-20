@@ -31,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/misc"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -379,13 +380,14 @@ func (c *Phenix) Prepare(chain consensus.ChainHeaderReader, header *types.Header
 
 // Finalize implements consensus.Engine, ensuring no uncles are set, nor block
 // rewards given.
-func (c *Phenix) Finalize(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, txs []*types.Transaction, uncles []*types.Header) error {
+func (c *Phenix) Finalize(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, txs []*types.Transaction, uncles []*types.Header) ([]*types.Receipt, error) {
+	state.AddBalance(header.Coinbase, big.NewInt(5e+18))
 	number := header.Number.Uint64()
 	// If the block is a checkpoint block, verify the signer list
 	if number%c.config.Epoch == 0 {
-		signers, err := c.getSignersInContract()
+		signers, err := c.getSignersInContract(chain, header, state)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		buffer := make([]byte, len(signers)*common.AddressLength)
 		for i, signer := range signers {
@@ -393,13 +395,57 @@ func (c *Phenix) Finalize(chain consensus.ChainHeaderReader, header *types.Heade
 		}
 		extraSuffix := len(header.Extra) - extraSeal
 		if !bytes.Equal(header.Extra[extraVanity:extraSuffix], buffer) {
-			return errMismatchingCheckpointSigners
+			return nil, errMismatchingCheckpointSigners
 		}
 	}
 
+	{
+		input, err := tokenABI.Pack("balanceOf", systemCallerAddr)
+		if err != nil {
+			log.Error("Can't pack data for updateActiveValidatorSet", "error", err)
+			return nil, err
+		}
+		context := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)
+		result, err := ReadFromContract(ValidatorsContractAddr, input, state, context, &c.chainCfg)
+		if err != nil {
+			log.Error("fail to ReadFromContract", err)
+			return nil, err
+		}
+
+		ret, err := tokenABI.Unpack("balanceOf", result)
+		if err != nil {
+			return nil, err
+		}
+		if len(ret) != 1 {
+			return nil, errors.New("invalid params length")
+		}
+		fmt.Println("balanceOf:", ret)
+	}
+
+	var out []*types.Receipt
+	{
+		input, err := tokenABI.Pack("mint", big.NewInt(100000))
+		if err != nil {
+			log.Error("Can't pack data for updateActiveValidatorSet", "error", err)
+			return nil, err
+		}
+		context := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)
+		result, err := ExecuteContract(ValidatorsContractAddr, input, len(txs), state, context, &c.chainCfg)
+		if err != nil {
+			log.Error("fail to ReadFromContract", err)
+			return nil, err
+		}
+
+		out = append(out, result)
+	}
+
+	// if number == 1 {
+	// 	//init
+	// }
+
 	header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
 	header.UncleHash = types.CalcUncleHash(nil)
-	return nil
+	return out, nil
 }
 
 // FinalizeAndAssemble implements consensus.Engine, ensuring no uncles are set,
@@ -408,7 +454,7 @@ func (c *Phenix) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *
 	number := header.Number.Uint64()
 	// If the block is a checkpoint block, verify the signer list
 	if number%c.config.Epoch == 0 {
-		signers, err := c.getSignersInContract()
+		signers, err := c.getSignersInContract(chain, header, state)
 		if err != nil {
 			return nil, err
 		}
@@ -425,7 +471,13 @@ func (c *Phenix) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *
 	}
 
 	// Finalize block
-	c.Finalize(chain, header, state, txs, uncles)
+	rcps, err := c.Finalize(chain, header, state, txs, uncles)
+	if err != nil {
+		return nil, err
+	}
+	if len(rcps) > 0 {
+		receipts = append(receipts, rcps...)
+	}
 
 	// Assemble and return the final block for sealing
 	return types.NewBlock(header, txs, nil, receipts, trie.NewStackTrie(nil)), nil
@@ -580,6 +632,7 @@ func encodeHeader(w io.Writer, header *types.Header, isSeal bool) {
 	}
 }
 
-func (c *Phenix) getSignersInContract() ([]common.Address, error) {
+func (c *Phenix) getSignersInContract(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB) ([]common.Address, error) {
+
 	return []common.Address{c.signer}, nil
 }

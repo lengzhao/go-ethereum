@@ -214,7 +214,7 @@ func CreateConsensusEngine(stack *node.Node, chainConfig *params.ChainConfig, co
 		return clique.New(chainConfig.Clique, db)
 	}
 	if chainConfig.Phenix != nil {
-		return phenix.New(chainConfig.Phenix, db)
+		return phenix.New(chainConfig, db)
 	}
 	// Otherwise assume proof-of-work
 	switch config.PowMode {

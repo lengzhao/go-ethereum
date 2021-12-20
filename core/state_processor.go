@@ -84,12 +84,17 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 			return nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 		}
 		receipts = append(receipts, receipt)
-		allLogs = append(allLogs, receipt.Logs...)
 	}
 	// Finalize the block, applying any consensus engine specific extras (e.g. block rewards)
-	err := p.engine.Finalize(p.bc, header, statedb, block.Transactions(), block.Uncles())
+	rcps, err := p.engine.Finalize(p.bc, header, statedb, block.Transactions(), block.Uncles())
 	if err != nil {
 		return nil, nil, 0, err
+	}
+
+	receipts = append(receipts, rcps...)
+
+	for _, receipt := range receipts {
+		allLogs = append(allLogs, receipt.Logs...)
 	}
 
 	return receipts, allLogs, *usedGas, nil

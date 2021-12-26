@@ -24,6 +24,7 @@ import (
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -32,9 +33,12 @@ import (
 	"github.com/ethereum/go-ethereum/eth"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/light"
 	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/ethereum/go-ethereum/trie"
 )
 
 var (
@@ -134,6 +138,30 @@ func TestGethClient(t *testing.T) {
 	}
 }
 
+func TestGetProof(t *testing.T) {
+	backend, _ := newTestBackend(t)
+	client, err := backend.Attach()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+	defer client.Close()
+
+	tests := []struct {
+		name string
+		test func(t *testing.T)
+	}{
+		{
+			"TestGetProof",
+			func(t *testing.T) { testGetProof(t, client) },
+		},
+	}
+	t.Parallel()
+	for _, tt := range tests {
+		t.Run(tt.name, tt.test)
+	}
+}
+
 func testAccessList(t *testing.T, client *rpc.Client) {
 	ec := New(client)
 	// Test transfer
@@ -191,7 +219,12 @@ func testAccessList(t *testing.T, client *rpc.Client) {
 func testGetProof(t *testing.T, client *rpc.Client) {
 	ec := New(client)
 	ethcl := ethclient.NewClient(client)
-	result, err := ec.GetProof(context.Background(), testAddr, []string{}, nil)
+	header, err := ethcl.HeaderByNumber(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := ec.GetProof(context.Background(), testAddr, []string{}, header.Number)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,14 +232,31 @@ func testGetProof(t *testing.T, client *rpc.Client) {
 		t.Fatalf("unexpected address, want: %v got: %v", testAddr, result.Address)
 	}
 	// test nonce
-	nonce, _ := ethcl.NonceAt(context.Background(), result.Address, nil)
+	nonce, _ := ethcl.NonceAt(context.Background(), result.Address, header.Number)
 	if result.Nonce != nonce {
 		t.Fatalf("invalid nonce, want: %v got: %v", nonce, result.Nonce)
 	}
 	// test balance
-	balance, _ := ethcl.BalanceAt(context.Background(), result.Address, nil)
+	balance, _ := ethcl.BalanceAt(context.Background(), result.Address, header.Number)
 	if result.Balance.Cmp(balance) != 0 {
 		t.Fatalf("invalid balance, want: %v got: %v", balance, result.Balance)
+	}
+	var node light.NodeList
+	for _, it := range result.AccountProof {
+		node = append(node, hexutil.MustDecode(it))
+	}
+	key := crypto.Keccak256(testAddr[:])
+	value, err := trie.VerifyProof(header.Root, key[:], node.NodeSet())
+	if err != nil {
+		t.Fatal("invalid VerifyProof, ", err)
+	}
+	var account types.StateAccount
+	err = rlp.DecodeBytes(value, &account)
+	if err != nil {
+		t.Fatal("invalid rlp.DecodeBytes, ", err)
+	}
+	if account.Balance.Cmp(balance) != 0 {
+		t.Fatalf("invalid account.balance, want: %v got: %v", balance, account.Balance)
 	}
 }
 

@@ -1,0 +1,45 @@
+[
+    {
+        "inputs": [
+            {
+                "internalType": "bytes",
+                "name": "bytecode",
+                "type": "bytes"
+            }
+        ],
+        "name": "deploy",
+        "outputs": [
+            {
+                "internalType": "address",
+                "name": "",
+                "type": "address"
+            }
+        ],
+        "stateMutability": "payable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "bytes32",
+                "name": "salt",
+                "type": "bytes32"
+            },
+            {
+                "internalType": "bytes32",
+                "name": "bytecodeHash",
+                "type": "bytes32"
+            }
+        ],
+        "name": "computeAddress",
+        "outputs": [
+            {
+                "internalType": "address",
+                "name": "",
+                "type": "address"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    }
+]

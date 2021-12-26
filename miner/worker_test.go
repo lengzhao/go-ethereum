@@ -17,6 +17,8 @@
 package miner
 
 import (
+	_ "embed"
+	"encoding/json"
 	"math/big"
 	"math/rand"
 	"sync/atomic"
@@ -48,6 +50,9 @@ const (
 	testGas = 144109
 )
 
+//go:embed data/shard1.json
+var phenixGen []byte
+
 var (
 	// Test chain configurations
 	testTxPoolConfig  core.TxPoolConfig
@@ -55,9 +60,11 @@ var (
 	cliqueChainConfig *params.ChainConfig
 
 	// Test accounts
-	testBankKey, _  = crypto.GenerateKey()
-	testBankAddress = crypto.PubkeyToAddress(testBankKey.PublicKey)
-	testBankFunds   = big.NewInt(1000000000000000000)
+	testBankKey, _   = crypto.GenerateKey()
+	testBankAddress  = crypto.PubkeyToAddress(testBankKey.PublicKey)
+	testBankFunds    = big.NewInt(1000000000000000000)
+	testBankKey2, _  = crypto.GenerateKey()
+	testBankAddress2 = crypto.PubkeyToAddress(testBankKey2.PublicKey)
 
 	testUserKey, _  = crypto.GenerateKey()
 	testUserAddress = crypto.PubkeyToAddress(testUserKey.PublicKey)
@@ -131,11 +138,15 @@ func newTestWorkerBackend(t *testing.T, chainConfig *params.ChainConfig, engine 
 			return crypto.Sign(crypto.Keccak256(data), testBankKey)
 		})
 	case *phenix.Phenix:
-		gspec.ExtraData = make([]byte, 32+common.AddressLength+crypto.SignatureLength)
-		copy(gspec.ExtraData[32:32+common.AddressLength], testBankAddress.Bytes())
-		gspec.Alloc[phenix.ValidatorsContractAddr] = core.GenesisAccount{
-			Balance: testBankFunds,
-			Code:    tokenCode,
+		// gspec.ExtraData = make([]byte, 128+common.AddressLength+crypto.SignatureLength)
+		// copy(gspec.ExtraData[128:128+common.AddressLength], testBankAddress.Bytes())
+		gspec.ExtraData = make([]byte, 128+common.AddressLength*2+crypto.SignatureLength)
+		copy(gspec.ExtraData[128:128+common.AddressLength], testBankAddress.Bytes())
+		copy(gspec.ExtraData[128+common.AddressLength:128+common.AddressLength*2], testBankAddress2.Bytes())
+		var g core.Genesis
+		json.Unmarshal(phenixGen, &g)
+		for k, v := range g.Alloc {
+			gspec.Alloc[k] = v
 		}
 		e.Authorize(testBankAddress, func(account accounts.Account, s string, data []byte) ([]byte, error) {
 			return crypto.Sign(crypto.Keccak256(data), testBankKey)
@@ -247,7 +258,7 @@ func testGenerateBlockAndImport(t *testing.T, eType int) {
 		engine = clique.New(chainConfig.Clique, db)
 	case enginePhenix:
 		chainConfig = params.AllPhenixProtocolChanges
-		chainConfig.Phenix = &params.PhenixConfig{Period: 1, Epoch: 5, ShadeID: 1}
+		chainConfig.Phenix = &params.PhenixConfig{Period: 1, Epoch: 5, ShardID: 1}
 		engine = phenix.New(chainConfig, db)
 	}
 

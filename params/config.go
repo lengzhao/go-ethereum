@@ -233,7 +233,16 @@ var (
 	// This configuration is intentionally not using keyed fields to force anyone
 	// adding flags to the config to also have to set these fields.
 	AllCliqueProtocolChanges = &ChainConfig{big.NewInt(1337), big.NewInt(0), nil, false, big.NewInt(0), common.Hash{}, big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), nil, nil, &CliqueConfig{Period: 0, Epoch: 30000}, nil}
-	AllPhenixProtocolChanges = &ChainConfig{big.NewInt(1337), big.NewInt(0), nil, false, big.NewInt(0), common.Hash{}, big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), nil, nil, nil, &PhenixConfig{Period: 0, Epoch: 30000, ShardID: 1}}
+	AllPhenixProtocolChanges = &ChainConfig{
+		big.NewInt(1338),
+		big.NewInt(0), nil, false,
+		big.NewInt(0), common.Hash{},
+		big.NewInt(0), big.NewInt(0),
+		big.NewInt(0), big.NewInt(0),
+		big.NewInt(0), big.NewInt(0),
+		big.NewInt(0), big.NewInt(0),
+		big.NewInt(0), nil, nil, nil,
+		&PhenixConfig{Period: 3, Epoch: 30000, ShardID: 1, Reward: 1000}}
 
 	TestChainConfig = &ChainConfig{big.NewInt(1), big.NewInt(0), nil, false, big.NewInt(0), common.Hash{}, big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), nil, new(EthashConfig), nil, nil}
 	TestRules       = TestChainConfig.Rules(new(big.Int))
@@ -350,6 +359,7 @@ type PhenixConfig struct {
 	Epoch      uint64 `json:"epoch"`  // Epoch length to reset votes and checkpoint
 	ShardID    uint64 `json:"shard_id"`
 	RouterAddr string `json:"router_addr"`
+	Reward     int64  `json:"reward"`
 }
 
 // String implements the stringer interface, returning the consensus engine details.

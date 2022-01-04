@@ -8,11 +8,12 @@
         "byzantiumBlock": 0,
         "constantinopleBlock": 0,
         "petersburgBlock": 0,
-        "clique": {
-            "period": 6,
+        "phenix": {
+            "period": 3,
             "epoch": 20000,
-            "shade_id":1,
-            "router_addr":"../aaa"
+            "shard_id":1,
+            "router_addr":"../aaa",
+            "reward":1000
         }
     },
     "difficulty": "1",

@@ -19,6 +19,7 @@ package miner
 import (
 	_ "embed"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"math/rand"
 	"sync/atomic"
@@ -31,6 +32,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/clique"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/consensus/phenix"
+	"github.com/ethereum/go-ethereum/consensus/phenix/abi"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -238,10 +240,6 @@ func TestGenerateBlockAndImportClique(t *testing.T) {
 	testGenerateBlockAndImport(t, engineClique)
 }
 
-func TestGenerateBlockAndImportPhenix(t *testing.T) {
-	testGenerateBlockAndImport(t, enginePhenix)
-}
-
 func testGenerateBlockAndImport(t *testing.T, eType int) {
 	var (
 		engine      consensus.Engine
@@ -258,7 +256,7 @@ func testGenerateBlockAndImport(t *testing.T, eType int) {
 		engine = clique.New(chainConfig.Clique, db)
 	case enginePhenix:
 		chainConfig = params.AllPhenixProtocolChanges
-		chainConfig.Phenix = &params.PhenixConfig{Period: 1, Epoch: 5, ShardID: 1}
+		chainConfig.Phenix = &params.PhenixConfig{Period: 1, Epoch: 8, ShardID: 1, Reward: 1000}
 		engine = phenix.New(chainConfig, db)
 	}
 
@@ -293,6 +291,59 @@ func testGenerateBlockAndImport(t *testing.T, eType int) {
 		select {
 		case ev := <-sub.Chan():
 			block := ev.Data.(core.NewMinedBlockEvent).Block
+			fmt.Println("InsertChain:", block.Number(), block.GasLimit(), block.Root())
+			if _, err := chain.InsertChain([]*types.Block{block}); err != nil {
+				t.Fatalf("failed to insert new mined block %d: %v", block.NumberU64(), err)
+			}
+		case <-time.After(3 * time.Second): // Worker needs 1s to include new changes.
+			t.Fatalf("timeout")
+		}
+	}
+}
+
+func TestGenerateBlockAndImportPhenix(t *testing.T) {
+	var (
+		engine      consensus.Engine
+		chainConfig *params.ChainConfig
+		db          = rawdb.NewMemoryDatabase()
+	)
+	chainConfig = params.AllPhenixProtocolChanges
+	chainConfig.Phenix = &params.PhenixConfig{Period: 1, Epoch: 8, ShardID: 1, Reward: 1000}
+	engine = phenix.New(chainConfig, db)
+
+	chainConfig.LondonBlock = big.NewInt(0)
+	w, b := newTestWorker(t, chainConfig, engine, db, 0)
+	defer w.close()
+
+	// This test chain imports the mined blocks.
+	db2 := rawdb.NewMemoryDatabase()
+	b.genesis.MustCommit(db2)
+	chain, _ := core.NewBlockChain(db2, nil, b.chain.Config(), engine, vm.Config{}, nil, nil)
+	defer chain.Stop()
+
+	// Ignore empty commit here for less noise.
+	w.skipSealHook = func(task *task) bool {
+		if task.block.Coinbase() == abi.AirDropAddr {
+			return false
+		}
+		return len(task.receipts) == 0
+	}
+
+	// Wait for mined blocks.
+	sub := w.mux.Subscribe(core.NewMinedBlockEvent{})
+	defer sub.Unsubscribe()
+
+	// Start mining!
+	w.start()
+
+	for i := 0; i < 20; i++ {
+		b.txPool.AddLocal(b.newRandomTx(true))
+		b.txPool.AddLocal(b.newRandomTx(false))
+
+		select {
+		case ev := <-sub.Chan():
+			block := ev.Data.(core.NewMinedBlockEvent).Block
+			fmt.Println("InsertChain:", block.Number(), block.GasUsed(), block.Coinbase(), block.Transactions().Len())
 			if _, err := chain.InsertChain([]*types.Block{block}); err != nil {
 				t.Fatalf("failed to insert new mined block %d: %v", block.NumberU64(), err)
 			}

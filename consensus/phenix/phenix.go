@@ -19,6 +19,7 @@ package phenix
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -64,10 +65,12 @@ var (
 	diffInTurn = big.NewInt(2) // Block difficulty for in-turn signatures
 	diffNoTurn = big.NewInt(1) // Block difficulty for out-of-turn signatures
 
-	emptySigner = common.HexToAddress("0x01")
-	// emptySigner  = abi.AirDropAddr
+	// emptySigner = common.HexToAddress("0x01")
+	emptySigner  = abi.AirDropAddr
 	nulSignature = make([]byte, extraSeal)
 	shardCreator = common.HexToAddress("0x8a170A0860F8B96F8B8ffBfADd000195Dd0512ae")
+
+	rewardBase = big.NewInt(1e+18)
 )
 
 // Various error messages to mark blocks invalid. These should be private to
@@ -177,6 +180,7 @@ func New(config *params.ChainConfig, db ethdb.Database) *Phenix {
 	// Allocate the snapshot caches and create the engine
 	recents, _ := lru.NewARC(inmemorySnapshots)
 	signatures, _ := lru.NewARC(inmemorySignatures)
+	log.Info("phenix consensus:", conf)
 	// log.Root().SetHandler(log.StdoutHandler)
 	return &Phenix{
 		chainCfg:   *config,
@@ -307,7 +311,7 @@ func (c *Phenix) verifyCascadingFields(chain consensus.ChainHeaderReader, header
 		return err
 	}
 	if signer != header.Coinbase {
-		fmt.Println("error Coinbase:", header.Coinbase, signer)
+		log.Error("error signer,Coinbase:", header.Coinbase, signer)
 		return errUnauthorizedSigner
 	}
 	if header.Coinbase == emptySigner {
@@ -325,7 +329,6 @@ func (c *Phenix) verifyCascadingFields(chain consensus.ChainHeaderReader, header
 		// Verify the header's EIP-1559 attributes.
 		return err
 	}
-
 	return nil
 }
 
@@ -341,7 +344,6 @@ func (c *Phenix) isvalidator(chain consensus.ChainHeaderReader, number uint64, a
 		copy(signers[i][:], checkpoint.Extra[extraShard+i*common.AddressLength:])
 	}
 	if len(signers) == 0 {
-		fmt.Println("not validator:", number, addr)
 		return false
 	}
 	index := (number + 1) % c.config.Epoch
@@ -367,22 +369,16 @@ func (c *Phenix) Prepare(chain consensus.ChainHeaderReader, header *types.Header
 	header.Nonce = types.BlockNonce{}
 
 	number := header.Number.Uint64()
-	// fmt.Println("Prepare:", len(header.Extra), number)
 	if !c.isvalidator(chain, number, c.signer) {
 		header.Coinbase = emptySigner
-		// 	header.GasLimit = 0
-		// } else {
-		// 	header.GasLimit = 10e8
 	}
 
 	// Set the correct difficulty
 	header.Difficulty = c.calcDifficulty(chain, header.Number.Uint64(), header.Coinbase)
 
-	// Ensure the extra data has all its components
-	if len(header.Extra) < extraShard {
-		header.Extra = append(header.Extra, bytes.Repeat([]byte{0x00}, extraShard-len(header.Extra))...)
-	}
-	header.Extra = header.Extra[:extraShard]
+	var info ShardInfo
+	info.ID = c.shardID
+	header.Extra, _ = bEncode(info)
 
 	header.Extra = append(header.Extra, make([]byte, extraSeal)...)
 
@@ -407,9 +403,21 @@ func (c *Phenix) Finalize(
 	uncles []*types.Header) ([]*types.Receipt, error) {
 
 	var out []*types.Receipt
-	txIndex := len(txs)
+	var err error
 
-	state.AddBalance(header.Coinbase, big.NewInt(5e+18))
+	if header.Coinbase == emptySigner && len(txs) > 0 {
+		return nil, fmt.Errorf("empty signer,but exist tx")
+	}
+
+	err = c.checkExtra(chain, header, state)
+	if err != nil {
+		return nil, err
+	}
+
+	reward := big.NewInt(c.config.Reward)
+	reward = reward.Mul(reward, rewardBase)
+
+	state.AddBalance(systemCallerAddr, reward)
 	number := header.Number.Uint64()
 	// If the block is a checkpoint block, verify the signer list
 	if number%c.config.Epoch == 0 {
@@ -430,78 +438,154 @@ func (c *Phenix) Finalize(
 	}
 
 	if number == 1 {
-		//init crossShard
-		{
-			input1, err := abi.GetABI(abi.ECrossShard).Pack("init", big.NewInt(int64(c.config.ShardID)))
-			if err != nil {
-				log.Error("Can't pack data for CrossShard.int", "error", err)
-				return nil, err
-			}
-			input2, err := abi.GetABI(abi.ESysProxy).Pack("upgradeToAndCall", abi.CodeCrossShardAddr, input1)
-			if err != nil {
-				log.Error("Can't pack data for CrossShard.upgradeToAndCall", "error", err)
-				return nil, err
-			}
-			context := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)
-			result, err := ExecuteContract(abi.CrossShardAddr, input2, txIndex, state, context, &c.chainCfg)
-			if err != nil {
-				log.Error("fail to ExecuteContract", err)
-				return nil, err
-			}
-			txIndex++
-			out = append(out, result)
+		out, err = c.initSystemContract(chain, header, state)
+		if err != nil {
+			return nil, err
 		}
-		//init shard_new
-		{
-			input1, err := abi.GetABI(abi.EShard).Pack("init", big.NewInt(int64(c.config.ShardID)), c.chainCfg.ChainID, shardCreator)
-			if err != nil {
-				log.Error("Can't pack data for Shard.int", "error", err)
-				return nil, err
-			}
-			input2, err := abi.GetABI(abi.ESysProxy).Pack("upgradeToAndCall", abi.CodeShardAddr, input1)
-			if err != nil {
-				log.Error("Can't pack data for Shard.upgradeToAndCall", "error", err)
-				return nil, err
-			}
-			context := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)
-			result, err := ExecuteContract(abi.ShardAddr, input2, txIndex, state, context, &c.chainCfg)
-			if err != nil {
-				log.Error("fail to ExecuteContract", err)
-				return nil, err
-			}
-			txIndex++
-			out = append(out, result)
-		}
+	}
 
-		//init miner
-		{
-			input, err := abi.GetABI(abi.ESysProxy).Pack("upgradeToAndCall", abi.CodeMinerAddr, []byte{})
-			if err != nil {
-				log.Error("Can't pack data for Miner.upgradeToAndCall", "error", err)
-				return nil, err
-			}
-			context := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)
-			result, err := ExecuteContract(abi.MinerAddr, input, txIndex, state, context, &c.chainCfg)
-			if err != nil {
-				log.Error("fail to ExecuteContract", err)
-				return nil, err
-			}
-			txIndex++
-			out = append(out, result)
+	if number%c.config.Epoch == c.config.Epoch/2 {
+		input, err := abi.GetABI(abi.EMiner).Pack("updateNextMiners")
+		if err != nil {
+			log.Error("Can't pack data for Miner.updateNextMiners", "error", err)
+			return nil, err
 		}
+		context := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)
+		result, err := ExecuteContract(abi.MinerAddr, input, new(big.Int), state, context, &c.chainCfg)
+		if err != nil {
+			log.Error("fail to ExecuteContract", err)
+			return nil, err
+		}
+		out = append(out, result)
+	}
+
+	if header.Coinbase != emptySigner {
+		input, err := abi.GetABI(abi.EMiner).Pack("reward")
+		if err != nil {
+			log.Error("Can't pack data for Miner.reward", "error", err)
+			return nil, err
+		}
+		context := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)
+		result, err := ExecuteContract(abi.MinerAddr, input, reward, state, context, &c.chainCfg)
+		if err != nil {
+			log.Error("fail to ExecuteContract", err)
+			return nil, err
+		}
+		out = append(out, result)
+	}
+
+	//check
+	{
+		input, err := abi.GetABI(abi.EMiner).Pack("candidateInfos", header.Coinbase)
+		if err != nil {
+			log.Error("Can't pack data for Miner.reward", "error", err)
+			return nil, err
+		}
+		context := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)
+		result, err := ReadFromContract(abi.MinerAddr, input, state, context, &c.chainCfg)
+		if err != nil {
+			log.Error("fail to ExecuteContract", err)
+			return nil, err
+		}
+		ret, err := abi.GetABI(abi.EMiner).Unpack("candidateInfos", result)
+		if err != nil {
+			fmt.Println("fail to read candidateInfos:", err)
+			return nil, err
+		}
+		// if len(ret) != 1 {
+		// 	return nil, errors.New("invalid params length")
+		// }
+		fmt.Println("balance:", header.Number, ret)
 	}
 
 	header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
 	header.UncleHash = types.CalcUncleHash(nil)
-	fmt.Println("Finalize:", header.Number, header.Coinbase, header.Root, len(txs))
-	// fmt.Println("balance:", state.GetBalance(header.Coinbase))
 	return out, nil
+}
+
+func (c *Phenix) initSystemContract(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB) ([]*types.Receipt, error) {
+	var out []*types.Receipt
+	//init crossShard
+	{
+		input1, err := abi.GetABI(abi.ECrossShard).Pack("init", big.NewInt(int64(c.config.ShardID)))
+		if err != nil {
+			log.Error("Can't pack data for CrossShard.int", "error", err)
+			return nil, err
+		}
+		input2, err := abi.GetABI(abi.ESysProxy).Pack("upgradeToAndCall", abi.CodeCrossShardAddr, input1)
+		if err != nil {
+			log.Error("Can't pack data for CrossShard.upgradeToAndCall", "error", err)
+			return nil, err
+		}
+		context := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)
+		result, err := ExecuteContract(abi.CrossShardAddr, input2, new(big.Int), state, context, &c.chainCfg)
+		if err != nil {
+			log.Error("fail to ExecuteContract", err)
+			return nil, err
+		}
+		out = append(out, result)
+	}
+	//init shard_new
+	{
+		input1, err := abi.GetABI(abi.EShard).Pack("init", big.NewInt(int64(c.config.ShardID)), c.chainCfg.ChainID, shardCreator)
+		if err != nil {
+			log.Error("Can't pack data for Shard.int", "error", err)
+			return nil, err
+		}
+		input2, err := abi.GetABI(abi.ESysProxy).Pack("upgradeToAndCall", abi.CodeShardAddr, input1)
+		if err != nil {
+			log.Error("Can't pack data for Shard.upgradeToAndCall", "error", err)
+			return nil, err
+		}
+		context := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)
+		result, err := ExecuteContract(abi.ShardAddr, input2, new(big.Int), state, context, &c.chainCfg)
+		if err != nil {
+			log.Error("fail to ExecuteContract", err)
+			return nil, err
+		}
+		out = append(out, result)
+	}
+
+	//init miner
+	{
+		input, err := abi.GetABI(abi.ESysProxy).Pack("upgradeToAndCall", abi.CodeMinerAddr, []byte{})
+		if err != nil {
+			log.Error("Can't pack data for Miner.upgradeToAndCall", "error", err)
+			return nil, err
+		}
+		context := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)
+		result, err := ExecuteContract(abi.MinerAddr, input, new(big.Int), state, context, &c.chainCfg)
+		if err != nil {
+			log.Error("fail to ExecuteContract", err)
+			return nil, err
+		}
+		out = append(out, result)
+	}
+	return out, nil
+}
+func (c *Phenix) checkExtra(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB) error {
+	var err error
+
+	var info ShardInfo
+	err = bDecode(header.Extra, &info)
+	if err != nil {
+		return err
+	}
+
+	if info.ID != c.shardID {
+		return fmt.Errorf("extra-data:error shard id")
+	}
+	if c.config.ShardID > 1 && info.Parent == (common.Hash{}) {
+		return fmt.Errorf("extra-data:empty parent shard")
+	}
+	return nil
 }
 
 // FinalizeAndAssemble implements consensus.Engine, ensuring no uncles are set,
 // nor block rewards given, and returns the final block.
 func (c *Phenix) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, txs []*types.Transaction, uncles []*types.Header, receipts []*types.Receipt) (*types.Block, error) {
 	number := header.Number.Uint64()
+	// log.Info("FinalizeAndAssemble:", number)
 	// If the block is a checkpoint block, verify the signer list
 	if number%c.config.Epoch == 0 {
 		signers, err := c.getSignersInContract(chain, header, state)
@@ -512,19 +596,14 @@ func (c *Phenix) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *
 		for i, signer := range signers {
 			copy(buffer[i*common.AddressLength:], signer[:])
 		}
-		fmt.Println("extra len:", number, len(header.Extra), len(buffer))
 		if len(header.Extra) < extraShard {
 			header.Extra = make([]byte, extraShard)
 		}
 		header.Extra = append(header.Extra[:extraShard], buffer...)
 		header.Extra = append(header.Extra, bytes.Repeat([]byte{0x00}, extraSeal)...)
 	}
-	// if header.Coinbase == emptySigner {
-	// 	txs = nil
-	// }
 
 	// Finalize block
-	fmt.Println("FinalizeAndAssemble")
 	rcps, err := c.Finalize(chain, header, state, txs, uncles)
 	if err != nil {
 		return nil, err
@@ -557,7 +636,6 @@ func (c *Phenix) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 	if number == 0 {
 		return errUnknownBlock
 	}
-	fmt.Println("Seal:", len(header.Extra), number)
 	// For 0-period chains, refuse to seal empty blocks (no reward but would spin sealing)
 	if c.config.Period == 0 && len(block.Transactions()) == 0 {
 		log.Info("Sealing paused, waiting for transactions")
@@ -577,16 +655,15 @@ func (c *Phenix) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 
 		log.Trace("Out-of-turn signing requested", "wiggle", common.PrettyDuration(wiggleTime))
 	}
+	// log.Info("Seal:", number)
 	v := NewVDFSqrt(nil)
 	x := crypto.Keccak256(header.ParentHash[:], header.Coinbase[:])
 	vr := v.Delay(params.VDFTime, new(big.Int).SetBytes(x))
 	header.MixDigest.SetBytes(vr.Bytes())
 
 	if header.Coinbase == emptySigner {
-		fmt.Println("Extra length1:", header.Number, len(header.Extra), header.Root)
 		copy(header.Extra[len(header.Extra)-extraSeal:], make([]byte, extraSeal))
 	} else {
-		fmt.Println("Extra length2:", header.Number, len(header.Extra), header.Root)
 		// Sign all the things!
 		sighash, err := signFn(accounts.Account{Address: signer}, accounts.MimetypeClique, encodeSigHeader(header))
 		if err != nil {
@@ -724,4 +801,17 @@ func (c *Phenix) getSignersInContract(chain consensus.ChainHeaderReader, header 
 	// }
 
 	return out, nil
+}
+
+func bEncode(in interface{}) ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.BigEndian, in)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func bDecode(in []byte, out interface{}) error {
+	return binary.Read(bytes.NewReader(in), binary.BigEndian, out)
 }

@@ -51,11 +51,12 @@ func ReadFromContract(contract common.Address, input []byte, state *state.StateD
 	return ret, nil
 }
 
-func ExecuteContract(contract common.Address, input []byte, ti int, state *state.StateDB, context vm.BlockContext, chainConfig *params.ChainConfig) (*types.Receipt, error) {
+func ExecuteContract(contract common.Address, input []byte, amount *big.Int, state *state.StateDB, context vm.BlockContext, chainConfig *params.ChainConfig) (*types.Receipt, error) {
 	nonce := state.GetNonce(systemCallerAddr) + 1
-	msg := types.NewMessage(systemCallerAddr, &contract, nonce, new(big.Int), math.MaxUint64, new(big.Int), new(big.Int), new(big.Int), input, nil, false)
+	msg := types.NewMessage(systemCallerAddr, &contract, nonce, amount, math.MaxUint64, new(big.Int), new(big.Int), new(big.Int), input, nil, false)
 	state.SetNonce(systemCallerAddr, nonce)
 
+	ti := state.TxIndex() + 1
 	h := crypto.Keccak256(systemCallerAddr.Bytes(), encode(nonce))
 	ths := common.Hash{}
 	ths.SetBytes(h)

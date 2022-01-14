@@ -17,6 +17,7 @@
 package phenix
 
 import (
+	"fmt"
 	"math/big"
 	"testing"
 
@@ -123,5 +124,76 @@ func TestSealHash(t *testing.T) {
 	want := common.HexToHash("0xbd3d1fa43fbc4c5bfcc91b179ec92e2861df3654de60468beb908ff805359e8f")
 	if have != want {
 		t.Errorf("have %x, want %x", have, want)
+	}
+}
+
+func TestDifficulty(t *testing.T) {
+	epoch := 40000
+	inturn := 6
+	noturn := 3
+	start := 400000
+	loop := 200000
+
+	diff := start
+	for i := 0; i < loop; i++ {
+		diff -= diff / epoch
+		diff += inturn
+	}
+	max := diff
+	fmt.Println("max:", max)
+	if max != 279999 {
+		t.Error("max:", max)
+	}
+
+	diff = start
+	for i := 0; i < loop; i++ {
+		diff -= diff / epoch
+		diff += noturn
+	}
+	min := diff
+	fmt.Println("min:", min)
+	if min != 159999 {
+		t.Error("min:", min)
+	}
+
+	diff = start
+	for i := 0; i < loop; i++ {
+		diff -= diff / epoch
+		if i%2 == 0 {
+			diff += inturn
+		} else {
+			diff += noturn
+		}
+	}
+	diffLimit := diff
+	fmt.Println("diffLimit:", diffLimit)
+	if diffLimit != 199999 {
+		t.Error("diffLimit:", diffLimit)
+	}
+
+	diff = max
+	for i := 0; i < loop; i++ {
+		diff -= diff / epoch
+		diff += noturn
+		if diff <= diffLimit {
+			fmt.Println("max->limit:", i)
+			if i != 33332 {
+				t.Error("max->limit:", i)
+			}
+			break
+		}
+	}
+
+	diff = start
+	for i := 0; i < loop; i++ {
+		diff -= diff / epoch
+		diff += noturn
+		if diff <= diffLimit {
+			fmt.Println("start->limit:", i)
+			if i != 57999 {
+				t.Error("start->limit:", i)
+			}
+			break
+		}
 	}
 }

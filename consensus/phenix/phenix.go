@@ -19,12 +19,13 @@ package phenix
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"math/big"
-	"math/rand"
+	"runtime"
 	"sync"
 	"time"
 
@@ -51,8 +52,6 @@ const (
 	checkpointInterval = 1024 // Number of blocks after which to save the vote snapshot to the database
 	inmemorySnapshots  = 128  // Number of recent vote snapshots to keep in memory
 	inmemorySignatures = 4096 // Number of recent block signatures to keep in memory
-
-	wiggleTime = 500 * time.Millisecond // Random delay (per signer) to allow concurrent signers
 )
 
 // Phenix proof-of-authority protocol constants.
@@ -62,8 +61,9 @@ var (
 
 	uncleHash = types.CalcUncleHash(nil) // Always Keccak256(RLP([])) as uncles are meaningless outside of PoW.
 
-	diffInTurn = big.NewInt(2) // Block difficulty for in-turn signatures
-	diffNoTurn = big.NewInt(1) // Block difficulty for out-of-turn signatures
+	diffInTurn    = big.NewInt(6) // Block difficulty for in-turn signatures
+	diffNoTurn    = big.NewInt(3) // Block difficulty for out-of-turn signatures
+	difficultyMin = big.NewInt(200000)
 
 	// emptySigner = common.HexToAddress("0x01")
 	emptySigner  = abi.AirDropAddr
@@ -163,10 +163,11 @@ type Phenix struct {
 	recents    *lru.ARCCache // Snapshots for recent block to speed up reorgs
 	signatures *lru.ARCCache // Signatures of recent blocks to speed up mining
 
-	signer  common.Address // Ethereum address of the signing key
-	signFn  SignerFn       // Signer function to authorize hashes with
-	lock    sync.RWMutex   // Protects the signer fields
-	shardID common.Hash
+	signer        common.Address // Ethereum address of the signing key
+	signFn        SignerFn       // Signer function to authorize hashes with
+	lock          sync.RWMutex   // Protects the signer fields
+	shardID       common.Hash
+	routerAddress string
 }
 
 // New creates a Phenix proof-of-authority consensus engine with the initial
@@ -180,15 +181,18 @@ func New(config *params.ChainConfig, db ethdb.Database) *Phenix {
 	// Allocate the snapshot caches and create the engine
 	recents, _ := lru.NewARC(inmemorySnapshots)
 	signatures, _ := lru.NewARC(inmemorySignatures)
-	log.Info("phenix consensus:", conf)
-	// log.Root().SetHandler(log.StdoutHandler)
+	ipcAddr := "./phenix_proxy.ipc"
+	if runtime.GOOS == "windows" {
+		ipcAddr = `\\.\pipe\phenix_proxy.ipc`
+	}
 	return &Phenix{
-		chainCfg:   *config,
-		config:     &conf,
-		db:         db,
-		recents:    recents,
-		signatures: signatures,
-		shardID:    common.BigToHash(new(big.Int).SetUint64(conf.ShardID)),
+		chainCfg:      *config,
+		config:        &conf,
+		db:            db,
+		recents:       recents,
+		signatures:    signatures,
+		shardID:       common.BigToHash(new(big.Int).SetUint64(conf.ShardID)),
+		routerAddress: ipcAddr,
 	}
 }
 
@@ -233,7 +237,6 @@ func (c *Phenix) verifyHeader(chain consensus.ChainHeaderReader, header *types.H
 	if header.Number == nil {
 		return errUnknownBlock
 	}
-	number := header.Number.Uint64()
 
 	// Don't waste time checking blocks from the future
 	if header.Time > uint64(time.Now().Unix()) {
@@ -259,12 +262,11 @@ func (c *Phenix) verifyHeader(chain consensus.ChainHeaderReader, header *types.H
 	if header.UncleHash != uncleHash {
 		return errInvalidUncleHash
 	}
-	// Ensure that the block's difficulty is meaningful (may not be correct at this point)
-	if number > 0 {
-		if header.Difficulty == nil || (header.Difficulty.Cmp(diffInTurn) != 0 && header.Difficulty.Cmp(diffNoTurn) != 0) {
-			return errInvalidDifficulty
-		}
+
+	if header.Difficulty.Cmp(difficultyMin) < 0 {
+		return errInvalidDifficulty
 	}
+
 	// Verify that the gas limit is <= 2^63-1
 	cap := uint64(0x7fffffffffffffff)
 	if header.GasLimit > cap {
@@ -314,12 +316,14 @@ func (c *Phenix) verifyCascadingFields(chain consensus.ChainHeaderReader, header
 		log.Error("error signer,Coinbase:", header.Coinbase, signer)
 		return errUnauthorizedSigner
 	}
+	hopeDifficulty := c.CalcDifficulty(chain, header.Time, parent)
 	if header.Coinbase == emptySigner {
-		if header.Difficulty.Cmp(diffNoTurn) != 0 {
+		hopeDifficulty = hopeDifficulty.Sub(hopeDifficulty, diffNoTurn)
+		if header.Difficulty.Cmp(hopeDifficulty) != 0 {
 			return errWrongDifficulty
 		}
 	} else if c.isvalidator(chain, header.Number.Uint64(), header.Coinbase) {
-		if header.Difficulty.Cmp(diffInTurn) != 0 {
+		if header.Difficulty.Cmp(hopeDifficulty) != 0 {
 			return errWrongDifficulty
 		}
 	} else {
@@ -333,7 +337,7 @@ func (c *Phenix) verifyCascadingFields(chain consensus.ChainHeaderReader, header
 }
 
 func (c *Phenix) isvalidator(chain consensus.ChainHeaderReader, number uint64, addr common.Address) bool {
-	ckNum := (number - 1) / c.config.Epoch * c.config.Epoch
+	ckNum := ((number - 1) / c.config.Epoch) * c.config.Epoch
 
 	checkpoint := chain.GetHeaderByNumber(ckNum)
 	if checkpoint == nil {
@@ -369,12 +373,6 @@ func (c *Phenix) Prepare(chain consensus.ChainHeaderReader, header *types.Header
 	header.Nonce = types.BlockNonce{}
 
 	number := header.Number.Uint64()
-	if !c.isvalidator(chain, number, c.signer) {
-		header.Coinbase = emptySigner
-	}
-
-	// Set the correct difficulty
-	header.Difficulty = c.calcDifficulty(chain, header.Number.Uint64(), header.Coinbase)
 
 	var info ShardInfo
 	info.ID = c.shardID
@@ -387,8 +385,13 @@ func (c *Phenix) Prepare(chain consensus.ChainHeaderReader, header *types.Header
 
 	// Ensure the timestamp has the correct delay
 	parent := chain.GetHeader(header.ParentHash, number-1)
-	if parent == nil {
+	if parent == nil || parent.Difficulty.Cmp(difficultyMin) < 0 {
 		return consensus.ErrUnknownAncestor
+	}
+	header.Difficulty = c.CalcDifficulty(chain, header.Number.Uint64(), parent)
+	if !c.isvalidator(chain, number, c.signer) {
+		header.Coinbase = emptySigner
+		header.Difficulty = header.Difficulty.Sub(header.Difficulty, diffNoTurn)
 	}
 	header.Time = parent.Time + c.config.Period
 	return nil
@@ -467,35 +470,11 @@ func (c *Phenix) Finalize(
 		}
 		context := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)
 		result, err := ExecuteContract(abi.MinerAddr, input, reward, state, context, &c.chainCfg)
-		if err != nil {
-			log.Error("fail to ExecuteContract", err)
+		if err != nil || result.Status != types.ReceiptStatusSuccessful {
+			log.Error("fail to ExecuteContract(reward)", err)
 			return nil, err
 		}
 		out = append(out, result)
-	}
-
-	//check
-	{
-		input, err := abi.GetABI(abi.EMiner).Pack("candidateInfos", header.Coinbase)
-		if err != nil {
-			log.Error("Can't pack data for Miner.reward", "error", err)
-			return nil, err
-		}
-		context := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)
-		result, err := ReadFromContract(abi.MinerAddr, input, state, context, &c.chainCfg)
-		if err != nil {
-			log.Error("fail to ExecuteContract", err)
-			return nil, err
-		}
-		ret, err := abi.GetABI(abi.EMiner).Unpack("candidateInfos", result)
-		if err != nil {
-			fmt.Println("fail to read candidateInfos:", err)
-			return nil, err
-		}
-		// if len(ret) != 1 {
-		// 	return nil, errors.New("invalid params length")
-		// }
-		fmt.Println("balance:", header.Number, ret)
 	}
 
 	header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
@@ -575,8 +554,56 @@ func (c *Phenix) checkExtra(chain consensus.ChainHeaderReader, header *types.Hea
 	if info.ID != c.shardID {
 		return fmt.Errorf("extra-data:error shard id")
 	}
+	if c.config.ShardID == 1 && info.Parent != (common.Hash{}) {
+		return fmt.Errorf("extra-data:shard1 exist parent")
+	}
 	if c.config.ShardID > 1 && info.Parent == (common.Hash{}) {
 		return fmt.Errorf("extra-data:empty parent shard")
+	}
+	ctx := context.Background()
+	client, err := rpc.DialContext(ctx, c.routerAddress)
+	if err != nil {
+		log.Crit("fail to connect monitor:", c.routerAddress, err)
+	}
+	defer client.Close()
+	if header.Number.Uint64()%10 == 0 && header.Number.Uint64() > 1000 {
+		h := chain.GetHeaderByNumber(header.Number.Uint64() - 100)
+
+		var head *types.Header
+		err = client.CallContext(ctx, &head, "proxy_headerByHash", big.NewInt(1), h.ParentHash)
+		if err != nil {
+			fmt.Println("fail to call proxy_headerByHash:", err)
+			return err
+		}
+		if head == nil {
+			fmt.Println("not found parent shard:", header.Number)
+			return fmt.Errorf("not found parent shard")
+		}
+		fmt.Println("proxy_headerByHash:", info.Parent, header.Number, head.Number)
+	}
+
+	if info.Parent != (common.Hash{}) {
+		fmt.Println("extra-parent:", info.Parent)
+		var head *types.Header
+		err = client.CallContext(ctx, &head, "proxy_headerByHash", big.NewInt(int64(c.config.ShardID)/2), info.Parent)
+		if err == nil {
+			return err
+		}
+		if head == nil {
+			return fmt.Errorf("not found parent shard")
+		}
+		fmt.Println("proxy_headerByHash:", info.Parent, header.Number, head.Number)
+		// 要求时间差为5分钟
+		// 如果number<k，则child=nul，否则child需要在本地
+		// 如果number==1，忽略；否则要求head.parent == parent.parentShard.header
+	}
+	if info.LeftChild != (common.Hash{}) {
+		fmt.Println("extra-leftchild:", info.LeftChild)
+		// 如果head.number==0，要求parent.child=nul
+		// 要求时间差为5分钟
+	}
+	if info.RightChild != (common.Hash{}) {
+		fmt.Println("extra-rightchild:", info.RightChild)
 	}
 	return nil
 }
@@ -648,13 +675,6 @@ func (c *Phenix) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 
 	// Sweet, the protocol permits us to sign the block, wait for our time
 	delay := time.Until(time.Unix(int64(header.Time), 0))
-	if header.Difficulty.Cmp(diffNoTurn) == 0 {
-		// It's not our turn explicitly to sign, delay it a bit
-		// wiggle := time.Duration(len(snap.Signers)/2+1) * wiggleTime
-		delay += time.Duration(rand.Int63n(int64(wiggleTime)))
-
-		log.Trace("Out-of-turn signing requested", "wiggle", common.PrettyDuration(wiggleTime))
-	}
 	// log.Info("Seal:", number)
 	v := NewVDFSqrt(nil)
 	x := crypto.Keccak256(header.ParentHash[:], header.Coinbase[:])
@@ -696,14 +716,14 @@ func (c *Phenix) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 // * DIFF_NOTURN(2) if BLOCK_NUMBER % SIGNER_COUNT != SIGNER_INDEX
 // * DIFF_INTURN(1) if BLOCK_NUMBER % SIGNER_COUNT == SIGNER_INDEX
 func (c *Phenix) CalcDifficulty(chain consensus.ChainHeaderReader, time uint64, parent *types.Header) *big.Int {
-	return c.calcDifficulty(chain, parent.Number.Uint64()+1, c.signer)
-}
+	d := parent.Difficulty.Uint64()
+	d = d - d/c.config.Epoch/2
+	// out := c.calcDifficulty(chain, parent.Number.Uint64()+1, c.signer)
+	out := new(big.Int).Set(diffInTurn)
+	out = out.Add(out, big.NewInt(int64(d)))
+	fmt.Println("CalcDifficulty:", parent.Number.Uint64()+1, parent.Difficulty.Uint64(), d, out.Uint64())
 
-func (c *Phenix) calcDifficulty(chain consensus.ChainHeaderReader, number uint64, signer common.Address) *big.Int {
-	if c.isvalidator(chain, number, signer) {
-		return new(big.Int).Set(diffInTurn)
-	}
-	return new(big.Int).Set(diffNoTurn)
+	return out
 }
 
 // SealHash returns the hash of a block prior to it being sealed.

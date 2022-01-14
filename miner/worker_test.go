@@ -143,6 +143,7 @@ func newTestWorkerBackend(t *testing.T, chainConfig *params.ChainConfig, engine 
 		// gspec.ExtraData = make([]byte, 128+common.AddressLength+crypto.SignatureLength)
 		// copy(gspec.ExtraData[128:128+common.AddressLength], testBankAddress.Bytes())
 		gspec.ExtraData = make([]byte, 128+common.AddressLength*2+crypto.SignatureLength)
+		gspec.Difficulty = big.NewInt(1000)
 		copy(gspec.ExtraData[128:128+common.AddressLength], testBankAddress.Bytes())
 		copy(gspec.ExtraData[128+common.AddressLength:128+common.AddressLength*2], testBankAddress2.Bytes())
 		var g core.Genesis

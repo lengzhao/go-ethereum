@@ -6,14 +6,11 @@ import (
 	"io/ioutil"
 	"log"
 	"math/big"
-	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 )
 
 type Config struct {
-	DataDir          string            `json:"data_dir,omitempty"`
 	IPCPath          string            `json:"ipc_path,omitempty"`
 	AddressRoot      string            `json:"address_root,omitempty"`
 	Nodes            map[uint64]string `json:"nodes,omitempty"`
@@ -26,10 +23,12 @@ type Config struct {
 var conf Config
 
 func init() {
-	// conf.AddressRoot = "./shard_%d/geth/geth.ipc"
-	conf.AddressRoot = `\\.\pipe\` + "phenix%d.ipc"
+	if runtime.GOOS == "windows" {
+		conf.AddressRoot = `\\.\pipe\` + "phenix%d.ipc"
+	} else {
+		conf.AddressRoot = "./shard%d/geth/geth.ipc"
+	}
 	conf.IPCPath = "phenix_proxy.ipc"
-	conf.DataDir = "./"
 	conf.Shards = []uint64{1}
 	conf.ShardCommand = "./geth"
 	LoadConfig("./conf.json")
@@ -60,13 +59,6 @@ func (c *Config) IPCEndpoint() string {
 			return c.IPCPath
 		}
 		return `\\.\pipe\` + c.IPCPath
-	}
-	// Resolve names into the data directory full paths otherwise
-	if filepath.Base(c.IPCPath) == c.IPCPath {
-		if c.DataDir == "" {
-			return filepath.Join(os.TempDir(), c.IPCPath)
-		}
-		return filepath.Join(c.DataDir, c.IPCPath)
 	}
 	return c.IPCPath
 }

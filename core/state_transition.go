@@ -313,13 +313,19 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 	var (
 		ret   []byte
 		vmerr error // vm errors do not effect consensus and are therefore not assigned to err
+		oHash common.Hash
 	)
 	if contractCreation {
-		ret, _, st.gas, vmerr = st.evm.Create(sender, st.data, st.gas, st.value)
+		var contractAddr common.Address
+		ret, contractAddr, st.gas, vmerr = st.evm.Create(sender, st.data, st.gas, st.value)
+		st.state.SetState(vm.ContractsCreatorInfo, contractAddr.Hash(), st.evm.Origin.Hash())
 	} else {
 		// Increment the nonce for the next transaction
 		st.state.SetNonce(msg.From(), st.state.GetNonce(sender.Address())+1)
 		ret, st.gas, vmerr = st.evm.Call(sender, st.to(), st.data, st.gas, st.value)
+		if vmerr == nil && london {
+			oHash = st.state.GetState(vm.ContractsCreatorInfo, st.to().Hash())
+		}
 	}
 
 	if !london {
@@ -332,6 +338,11 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 	effectiveTip := st.gasPrice
 	if london {
 		effectiveTip = cmath.BigMin(st.gasTipCap, new(big.Int).Sub(st.gasFeeCap, st.evm.Context.BaseFee))
+		if oHash != (common.Hash{}) {
+			var owner common.Address
+			owner.SetBytes(oHash[:])
+			st.state.AddBalance(owner, new(big.Int).Mul(new(big.Int).SetUint64(st.gasUsed()/2), st.evm.Context.BaseFee))
+		}
 	}
 	st.state.AddBalance(st.evm.Context.Coinbase, new(big.Int).Mul(new(big.Int).SetUint64(st.gasUsed()), effectiveTip))
 

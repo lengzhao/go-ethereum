@@ -13,6 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -67,6 +68,7 @@ func ExecuteContract(contract common.Address, input []byte, amount *big.Int, sta
 
 	receipt := &types.Receipt{Type: types.LegacyTxType, PostState: nil, CumulativeGasUsed: 2}
 	if err != nil {
+		log.Warn("fail to ExecuteContract", "Contract", *msg.To(), "error", err)
 		receipt.Status = types.ReceiptStatusFailed
 	} else {
 		receipt.Status = types.ReceiptStatusSuccessful

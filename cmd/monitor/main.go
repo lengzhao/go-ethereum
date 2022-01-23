@@ -19,14 +19,12 @@ package main
 
 import (
 	"crypto/ecdsa"
+	_ "embed"
 	"flag"
 	"fmt"
 	"io/ioutil"
 	"net"
 	"os"
-	"os/exec"
-
-	_ "embed"
 
 	"github.com/ethereum/go-ethereum/cmd/utils"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -38,12 +36,8 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
-var (
-	//go:embed shard1.json
-	shard1Gen []byte
-	// //go:embed shard.json.gotmpl
-	// shardxGen []byte
-)
+//go:embed shard1.json
+var shard1Gen []byte
 
 func main() {
 	var (
@@ -79,17 +73,10 @@ func main() {
 		if err != nil {
 			utils.Fatalf("fail to dump genesis file, %v", err)
 		}
-		dirName := "shard1"
-		err = os.Mkdir(dirName, 0666)
+
+		err := initShard(1, *dumpGenFile)
 		if err != nil {
-			utils.Fatalf("fail to mkdir of shard1, %v", err)
-		}
-		cmd := exec.Command(conf.ShardCommand, "init", "--datadir", dirName, *dumpGenFile)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		err = cmd.Run()
-		if err != nil {
-			utils.Fatalf("fail to init shard1,%s %v", cmd.String(), err)
+			utils.Fatalf("fail to init shard1, %v", err)
 		}
 		return
 	case *genKey != "":

@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/accounts"
+	gabi "github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/misc"
@@ -65,12 +66,17 @@ var (
 	diffNoTurn    = big.NewInt(3) // Block difficulty for out-of-turn signatures
 	difficultyMin = big.NewInt(200000)
 
+	firstBlockInterval uint64 = 24 * 3600
+	shardInterval      uint64 = 5 * 30
+
 	// emptySigner = common.HexToAddress("0x01")
 	emptySigner  = abi.AirDropAddr
 	nulSignature = make([]byte, extraSeal)
 	shardCreator = common.HexToAddress("0x8a170A0860F8B96F8B8ffBfADd000195Dd0512ae")
 
 	rewardBase = big.NewInt(1e+18)
+
+	logSigHash = crypto.Keccak256Hash([]byte("Transfer(uint256,uint256,address,bytes)"))
 )
 
 // Various error messages to mark blocks invalid. These should be private to
@@ -253,7 +259,11 @@ func (c *Phenix) verifyHeader(chain consensus.ChainHeaderReader, header *types.H
 
 	v := NewVDFSqrt(nil)
 	x := crypto.Keccak256(header.ParentHash[:], header.Coinbase[:])
-	rst := v.Verify(params.VDFTime, new(big.Int).SetBytes(x), new(big.Int).SetBytes(header.MixDigest[:]))
+	t := params.VDFTime
+	if header.Coinbase == emptySigner {
+		t *= 2
+	}
+	rst := v.Verify(t, new(big.Int).SetBytes(x), new(big.Int).SetBytes(header.MixDigest[:]))
 	if !rst {
 		return errInvalidMixDigest
 	}
@@ -322,7 +332,7 @@ func (c *Phenix) verifyCascadingFields(chain consensus.ChainHeaderReader, header
 		if header.Difficulty.Cmp(hopeDifficulty) != 0 {
 			return errWrongDifficulty
 		}
-	} else if c.isvalidator(chain, header.Number.Uint64(), header.Coinbase) {
+	} else if c.getMiner(chain, number) == header.Coinbase {
 		if header.Difficulty.Cmp(hopeDifficulty) != 0 {
 			return errWrongDifficulty
 		}
@@ -336,23 +346,23 @@ func (c *Phenix) verifyCascadingFields(chain consensus.ChainHeaderReader, header
 	return nil
 }
 
-func (c *Phenix) isvalidator(chain consensus.ChainHeaderReader, number uint64, addr common.Address) bool {
+func (c *Phenix) getMiner(chain consensus.ChainHeaderReader, number uint64) common.Address {
 	ckNum := ((number - 1) / c.config.Epoch) * c.config.Epoch
 
 	checkpoint := chain.GetHeaderByNumber(ckNum)
 	if checkpoint == nil {
-		return false
+		return emptySigner
 	}
 	signers := make([]common.Address, (len(checkpoint.Extra)-extraShard-extraSeal)/common.AddressLength)
 	for i := 0; i < len(signers); i++ {
 		copy(signers[i][:], checkpoint.Extra[extraShard+i*common.AddressLength:])
 	}
 	if len(signers) == 0 {
-		return false
+		return emptySigner
 	}
 	index := (number + 1) % c.config.Epoch
 	index = index % uint64(len(signers))
-	return signers[index] == addr
+	return signers[index]
 }
 
 // VerifyUncles implements consensus.Engine, always returning an error for any
@@ -385,11 +395,16 @@ func (c *Phenix) Prepare(chain consensus.ChainHeaderReader, header *types.Header
 
 	// Ensure the timestamp has the correct delay
 	parent := chain.GetHeader(header.ParentHash, number-1)
-	if parent == nil || parent.Difficulty.Cmp(difficultyMin) < 0 {
+	if parent == nil {
+		log.Error("not found parent when Prepare")
+		return consensus.ErrUnknownAncestor
+	}
+	if parent.Difficulty.Cmp(difficultyMin) < 0 {
+		log.Error("error parent difficulty when Prepare", "difficulty", parent.Difficulty, "hope", difficultyMin)
 		return consensus.ErrUnknownAncestor
 	}
 	header.Difficulty = c.CalcDifficulty(chain, header.Number.Uint64(), parent)
-	if !c.isvalidator(chain, number, c.signer) {
+	if c.getMiner(chain, number) != c.signer {
 		header.Coinbase = emptySigner
 		header.Difficulty = header.Difficulty.Sub(header.Difficulty, diffNoTurn)
 	}
@@ -414,13 +429,13 @@ func (c *Phenix) Finalize(
 
 	err = c.checkExtra(chain, header, state)
 	if err != nil {
+		log.Warn("checkExtra", "number", header.Number, "error", err)
 		return nil, err
 	}
 
 	reward := big.NewInt(c.config.Reward)
 	reward = reward.Mul(reward, rewardBase)
 
-	state.AddBalance(systemCallerAddr, reward)
 	number := header.Number.Uint64()
 	// If the block is a checkpoint block, verify the signer list
 	if number%c.config.Epoch == 0 {
@@ -462,7 +477,9 @@ func (c *Phenix) Finalize(
 		out = append(out, result)
 	}
 
-	if header.Coinbase != emptySigner {
+	hopeMiner := c.getMiner(chain, number)
+	if hopeMiner == header.Coinbase {
+		state.AddBalance(systemCallerAddr, reward)
 		input, err := abi.GetABI(abi.EMiner).Pack("reward")
 		if err != nil {
 			log.Error("Can't pack data for Miner.reward", "error", err)
@@ -470,16 +487,80 @@ func (c *Phenix) Finalize(
 		}
 		context := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)
 		result, err := ExecuteContract(abi.MinerAddr, input, reward, state, context, &c.chainCfg)
-		if err != nil || result.Status != types.ReceiptStatusSuccessful {
-			log.Error("fail to ExecuteContract(reward)", err)
+		if err != nil {
+			log.Error("fail to ExecuteContract(reward)", "error", err)
+			return nil, err
+		}
+		if result.Status != types.ReceiptStatusSuccessful {
+			log.Error("fail to ExecuteContract(reward)", "Status", result.Status)
 			return nil, err
 		}
 		out = append(out, result)
+	} else if hopeMiner != emptySigner {
+		state.AddBalance(abi.AirDropAddr, reward)
+		input, err := abi.GetABI(abi.EMiner).Pack("punish", hopeMiner, reward)
+		if err != nil {
+			log.Error("Can't pack data for Miner.reward", "hope miner", hopeMiner, "error", err)
+			return nil, err
+		}
+		context := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)
+		result, err := ExecuteContract(abi.MinerAddr, input, new(big.Int), state, context, &c.chainCfg)
+		if err != nil {
+			log.Error("fail to ExecuteContract(punish)", "hope miner", hopeMiner, "error", err)
+			return nil, err
+		}
+		if result.Status != types.ReceiptStatusSuccessful {
+			log.Error("fail to ExecuteContract(punish)", "Status", result.Status, "hope miner", hopeMiner)
+			return nil, err
+		}
+		out = append(out, result)
+	}
+	rcps, err := c.syncEvents(chain, header, state)
+	if err != nil {
+		return nil, err
+	}
+	if len(rcps) > 0 {
+		out = append(out, rcps...)
 	}
 
 	header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
 	header.UncleHash = types.CalcUncleHash(nil)
 	return out, nil
+}
+
+// FinalizeAndAssemble implements consensus.Engine, ensuring no uncles are set,
+// nor block rewards given, and returns the final block.
+func (c *Phenix) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, txs []*types.Transaction, uncles []*types.Header, receipts []*types.Receipt) (*types.Block, error) {
+	number := header.Number.Uint64()
+	// log.Info("FinalizeAndAssemble:", number)
+	// If the block is a checkpoint block, verify the signer list
+	if number%c.config.Epoch == 0 {
+		signers, err := c.getSignersInContract(chain, header, state)
+		if err != nil {
+			return nil, err
+		}
+		buffer := make([]byte, len(signers)*common.AddressLength)
+		for i, signer := range signers {
+			copy(buffer[i*common.AddressLength:], signer[:])
+		}
+		if len(header.Extra) < extraShard {
+			header.Extra = make([]byte, extraShard)
+		}
+		header.Extra = append(header.Extra[:extraShard], buffer...)
+		header.Extra = append(header.Extra, bytes.Repeat([]byte{0x00}, extraSeal)...)
+	}
+
+	// Finalize block
+	rcps, err := c.Finalize(chain, header, state, txs, uncles)
+	if err != nil {
+		return nil, err
+	}
+	if len(rcps) > 0 {
+		receipts = append(receipts, rcps...)
+	}
+
+	// Assemble and return the final block for sealing
+	return types.NewBlock(header, txs, nil, receipts, trie.NewStackTrie(nil)), nil
 }
 
 func (c *Phenix) initSystemContract(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB) ([]*types.Receipt, error) {
@@ -542,12 +623,12 @@ func (c *Phenix) initSystemContract(chain consensus.ChainHeaderReader, header *t
 	}
 	return out, nil
 }
-func (c *Phenix) checkExtra(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB) error {
-	var err error
 
-	var info ShardInfo
-	err = bDecode(header.Extra, &info)
+func (c *Phenix) checkExtra(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB) error {
+	number := header.Number.Uint64()
+	info, err := getShardInfo(header.Extra)
 	if err != nil {
+		log.Warn("error shard info:", "number", number, "error", err)
 		return err
 	}
 
@@ -560,87 +641,492 @@ func (c *Phenix) checkExtra(chain consensus.ChainHeaderReader, header *types.Hea
 	if c.config.ShardID > 1 && info.Parent == (common.Hash{}) {
 		return fmt.Errorf("extra-data:empty parent shard")
 	}
+
+	err = c.checkParentShard(chain, header, state, info.Parent)
+	if err != nil {
+		log.Warn("checkParentShard", "error", err)
+		return err
+	}
+
+	err = c.checkLeftChildShard(chain, header, state, info.LeftChild)
+	if err != nil {
+		log.Warn("checkLeftChildShard", "error", err)
+		return err
+	}
+
+	err = c.checkRightChildShard(chain, header, state, info.RightChild)
+	if err != nil {
+		log.Warn("checkRightChildShard", "error", err)
+		return err
+	}
+
+	state.SetBalance(abi.CrossShardAddr, common.Big1)
+
+	return nil
+}
+
+func getShardInfo(in []byte) (*ShardInfo, error) {
+	var info ShardInfo
+	err := bDecode(in, &info)
+	if err != nil {
+		return nil, err
+	}
+	return &info, nil
+}
+
+func (c *Phenix) checkParentShard(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, ps common.Hash) error {
+	if ps == (common.Hash{}) {
+		if c.config.ShardID != 1 {
+			return fmt.Errorf("require parent shard")
+		}
+		return nil
+	}
 	ctx := context.Background()
 	client, err := rpc.DialContext(ctx, c.routerAddress)
 	if err != nil {
 		log.Crit("fail to connect monitor:", c.routerAddress, err)
 	}
 	defer client.Close()
-	if header.Number.Uint64()%10 == 0 && header.Number.Uint64() > 1000 {
-		h := chain.GetHeaderByNumber(header.Number.Uint64() - 100)
 
-		var head *types.Header
-		err = client.CallContext(ctx, &head, "proxy_headerByHash", big.NewInt(1), h.ParentHash)
-		if err != nil {
-			fmt.Println("fail to call proxy_headerByHash:", err)
-			return err
+	var head *types.Header
+	err = client.CallContext(ctx, &head, "proxy_headerByHash", big.NewInt(int64(c.config.ShardID)/2), ps)
+	if err != nil {
+		return err
+	}
+	if head == nil {
+		return fmt.Errorf("not found parent shard")
+	}
+	number := header.Number.Uint64()
+
+	if number == 0 {
+		if header.Time != head.Time+firstBlockInterval {
+			return fmt.Errorf("error parent time")
 		}
-		if head == nil {
-			fmt.Println("not found parent shard:", header.Number)
-			return fmt.Errorf("not found parent shard")
+		return nil
+	}
+	if number == 1 {
+		if header.Time != head.Time+shardInterval {
+			return fmt.Errorf("error parent time")
 		}
-		fmt.Println("proxy_headerByHash:", info.Parent, header.Number, head.Number)
+		return nil
+	}
+	parent := chain.GetHeaderByHash(header.ParentHash)
+	if parent == nil {
+		return fmt.Errorf("not found parent")
 	}
 
-	if info.Parent != (common.Hash{}) {
-		fmt.Println("extra-parent:", info.Parent)
-		var head *types.Header
-		err = client.CallContext(ctx, &head, "proxy_headerByHash", big.NewInt(int64(c.config.ShardID)/2), info.Parent)
-		if err == nil {
-			return err
-		}
-		if head == nil {
-			return fmt.Errorf("not found parent shard")
-		}
-		fmt.Println("proxy_headerByHash:", info.Parent, header.Number, head.Number)
-		// 要求时间差为5分钟
-		// 如果number<k，则child=nul，否则child需要在本地
-		// 如果number==1，忽略；否则要求head.parent == parent.parentShard.header
+	pInfo, _ := getShardInfo(parent.Extra)
+	if head.ParentHash != pInfo.Parent {
+		log.Warn("error parent shard:", "hope", pInfo.Parent, "get", head.ParentHash)
+		return fmt.Errorf("error parent shard")
 	}
-	if info.LeftChild != (common.Hash{}) {
-		fmt.Println("extra-leftchild:", info.LeftChild)
-		// 如果head.number==0，要求parent.child=nul
-		// 要求时间差为5分钟
+	if number < 2*shardInterval/c.config.Period {
+		// not enough time, parent shard do not include the block of this shard.
+		return nil
 	}
-	if info.RightChild != (common.Hash{}) {
-		fmt.Println("extra-rightchild:", info.RightChild)
+
+	psInfo, _ := getShardInfo(head.Extra)
+
+	key := psInfo.LeftChild
+	if c.config.ShardID%2 == 1 {
+		key = psInfo.RightChild
 	}
+	if key == (common.Hash{}) {
+		return fmt.Errorf("error child of parent shard")
+	}
+	pChild := chain.GetHeaderByHash(key)
+	if pChild == nil {
+		log.Warn("error parent shard(child):", "parent shard", ps, "child", key)
+		return fmt.Errorf("not found the child of parent shard")
+	}
+
 	return nil
 }
 
-// FinalizeAndAssemble implements consensus.Engine, ensuring no uncles are set,
-// nor block rewards given, and returns the final block.
-func (c *Phenix) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, txs []*types.Transaction, uncles []*types.Header, receipts []*types.Receipt) (*types.Block, error) {
-	number := header.Number.Uint64()
-	// log.Info("FinalizeAndAssemble:", number)
-	// If the block is a checkpoint block, verify the signer list
-	if number%c.config.Epoch == 0 {
-		signers, err := c.getSignersInContract(chain, header, state)
+func (c *Phenix) checkLeftChildShard(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, cs common.Hash) error {
+	if cs == (common.Hash{}) {
+		input, err := abi.GetABI(abi.EShard).Pack("shards", big.NewInt(int64(c.config.ShardID)*2))
 		if err != nil {
-			return nil, err
+			log.Error("Can't pack data for miners", "error", err)
+			return err
 		}
-		buffer := make([]byte, len(signers)*common.AddressLength)
-		for i, signer := range signers {
-			copy(buffer[i*common.AddressLength:], signer[:])
+		evmCTX := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)
+		result, err := ReadFromContract(abi.ShardAddr, input, state, evmCTX, &c.chainCfg)
+		if err != nil {
+			log.Error("fail to ReadFromContract", err)
+			return err
 		}
-		if len(header.Extra) < extraShard {
-			header.Extra = make([]byte, extraShard)
+		if len(result) == 0 {
+			return nil
 		}
-		header.Extra = append(header.Extra[:extraShard], buffer...)
-		header.Extra = append(header.Extra, bytes.Repeat([]byte{0x00}, extraSeal)...)
+		var t *big.Int
+		err = abi.GetABI(abi.EShard).UnpackIntoInterface(&t, "shards", result)
+		if err != nil {
+			log.Error("fail to unpack EShard.shards", "result", result, "error", err)
+			return err
+		}
+		if t.Uint64() == 0 {
+			return nil
+		}
+		if t.Uint64()+firstBlockInterval+shardInterval <= header.Time {
+			return errors.New("require left child shard")
+		}
+		if t.Uint64()+firstBlockInterval/2 < header.Time {
+			return nil
+		}
+		// start the shard thread
+		if header.Number.Uint64()%100 == 0 {
+			c.startShardThread(chain, header, state, big.NewInt(int64(c.config.ShardID)*2))
+		}
+		return nil
+	}
+	ctx := context.Background()
+	client, err := rpc.DialContext(ctx, c.routerAddress)
+	if err != nil {
+		log.Crit("fail to connect monitor:", c.routerAddress, err)
+	}
+	defer client.Close()
+
+	var head *types.Header
+	err = client.CallContext(ctx, &head, "proxy_headerByHash", big.NewInt(int64(c.config.ShardID)*2), cs)
+	if err != nil {
+		return err
+	}
+	if head == nil {
+		return fmt.Errorf("not found left child shard")
+	}
+	if head.Time+shardInterval != header.Time {
+		return fmt.Errorf("error left child time")
+	}
+	pInfo, _ := getShardInfo(head.Extra)
+	cp := chain.GetHeaderByHash(pInfo.Parent)
+	if cp == nil {
+		return fmt.Errorf("not found the parent of left child shard")
+	}
+	parent := chain.GetHeaderByHash(header.ParentHash)
+	if parent == nil {
+		return fmt.Errorf("not found parent")
+	}
+	prInfo, _ := getShardInfo(parent.Extra)
+
+	if head.Number.Cmp(common.Big0) == 0 {
+		if prInfo.LeftChild != (common.Hash{}) {
+			return fmt.Errorf("error number of left child shard")
+		}
+		return nil
+	}
+	if head.Number.Cmp(common.Big1) == 0 {
+		input, err := abi.GetABI(abi.ECrossShard).Pack("activeShard", big.NewInt(int64(c.config.ShardID)*2))
+		if err != nil {
+			log.Error("Can't pack data for crossShard.activeShard", "error", err)
+			return err
+		}
+		context := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)
+		_, err = ExecuteContract(abi.CrossShardAddr, input, new(big.Int), state, context, &c.chainCfg)
+		if err != nil {
+			log.Error("fail to ExecuteContract:activeShard", "error", err)
+			return err
+		}
+		return nil
+	}
+	if cp.ParentHash != prInfo.Parent {
+		return fmt.Errorf("error parent of left child shard")
 	}
 
-	// Finalize block
-	rcps, err := c.Finalize(chain, header, state, txs, uncles)
+	return nil
+}
+
+func (c *Phenix) checkRightChildShard(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, cs common.Hash) error {
+	if cs == (common.Hash{}) {
+		input, err := abi.GetABI(abi.EShard).Pack("shards", big.NewInt(int64(c.config.ShardID)*2+1))
+		if err != nil {
+			log.Error("Can't pack data for miners", "error", err)
+			return err
+		}
+		evmCTX := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)
+		result, err := ReadFromContract(abi.ShardAddr, input, state, evmCTX, &c.chainCfg)
+		if err != nil {
+			log.Error("fail to ReadFromContract", err)
+			return err
+		}
+		if len(result) == 0 {
+			return nil
+		}
+		var t *big.Int
+		err = abi.GetABI(abi.EShard).UnpackIntoInterface(&t, "shards", result)
+		if err != nil {
+			return err
+		}
+		if t.Uint64() == 0 {
+			return nil
+		}
+		if t.Uint64()+firstBlockInterval+shardInterval <= header.Time {
+			return errors.New("require right child shard")
+		}
+		if t.Uint64()+firstBlockInterval/2 < header.Time {
+			return nil
+		}
+		// start the shard thread
+		if header.Number.Uint64()%100 == 0 {
+			c.startShardThread(chain, header, state, big.NewInt(int64(c.config.ShardID)*2+1))
+		}
+		return nil
+	}
+	ctx := context.Background()
+	client, err := rpc.DialContext(ctx, c.routerAddress)
+	if err != nil {
+		log.Crit("fail to connect monitor:", c.routerAddress, err)
+	}
+	defer client.Close()
+
+	var head *types.Header
+	err = client.CallContext(ctx, &head, "proxy_headerByHash", big.NewInt(int64(c.config.ShardID)*2+1), cs)
+	if err != nil {
+		return err
+	}
+	if head == nil {
+		return fmt.Errorf("not found right child shard")
+	}
+	if head.Time+shardInterval != header.Time {
+		return fmt.Errorf("error right child time")
+	}
+	pInfo, _ := getShardInfo(head.Extra)
+	cp := chain.GetHeaderByHash(pInfo.Parent)
+	if cp == nil {
+		return fmt.Errorf("not found the parent of right child shard")
+	}
+	parent := chain.GetHeaderByHash(header.ParentHash)
+	if parent == nil {
+		return fmt.Errorf("not found parent")
+	}
+	prInfo, _ := getShardInfo(parent.Extra)
+
+	if head.Number.Cmp(common.Big0) == 0 {
+		if prInfo.RightChild != (common.Hash{}) {
+			return fmt.Errorf("error number of right child shard")
+		}
+		return nil
+	}
+	if head.Number.Cmp(common.Big1) == 0 {
+		input, err := abi.GetABI(abi.ECrossShard).Pack("activeShard", big.NewInt(int64(c.config.ShardID)*2+1))
+		if err != nil {
+			log.Error("Can't pack data for crossShard.activeShard", "error", err)
+			return err
+		}
+		context := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)
+		_, err = ExecuteContract(abi.CrossShardAddr, input, new(big.Int), state, context, &c.chainCfg)
+		if err != nil {
+			log.Error("fail to ExecuteContract:crossShard", "error", err)
+			return err
+		}
+		return nil
+	}
+	if cp.ParentHash != prInfo.Parent {
+		return fmt.Errorf("error parent of right child shard")
+	}
+
+	return nil
+}
+
+func (c *Phenix) startShardThread(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, shardID *big.Int) error {
+	ctx := context.Background()
+	client, err := rpc.DialContext(ctx, c.routerAddress)
+	if err != nil {
+		log.Crit("fail to connect monitor:", c.routerAddress, err)
+	}
+	defer client.Close()
+	var head *types.Header
+	err = client.CallContext(ctx, &head, "proxy_headerByNumber", shardID, common.Big0)
+	if err == nil && head != nil {
+		// started
+		return nil
+	}
+	// params: shardID, chainID, reward, timestamp *big.Int, hash common.Hash
+	var (
+		timestamp *big.Int
+		chainID   *big.Int
+	)
+	{
+		input, err := abi.GetABI(abi.EShard).Pack("shards", shardID)
+		if err != nil {
+			log.Error("Can't pack data for miners", "error", err)
+			return err
+		}
+		evmCTX := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)
+		result, err := ReadFromContract(abi.ShardAddr, input, state, evmCTX, &c.chainCfg)
+		if err != nil {
+			log.Error("fail to ReadFromContract", err)
+			return err
+		}
+		if len(result) == 0 {
+			return nil
+		}
+
+		err = abi.GetABI(abi.EShard).UnpackIntoInterface(&timestamp, "shards", result)
+		if err != nil {
+			return err
+		}
+	}
+	{
+		input, err := abi.GetABI(abi.EShard).Pack("chainOfShard", shardID)
+		if err != nil {
+			log.Error("Can't pack data for miners", "error", err)
+			return err
+		}
+		evmCTX := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)
+		result, err := ReadFromContract(abi.ShardAddr, input, state, evmCTX, &c.chainCfg)
+		if err != nil {
+			log.Error("fail to ReadFromContract", err)
+			return err
+		}
+		if len(result) == 0 {
+			return nil
+		}
+
+		err = abi.GetABI(abi.EShard).UnpackIntoInterface(&chainID, "chainOfShard", result)
+		if err != nil {
+			return err
+		}
+	}
+	ht := timestamp.Uint64()
+	if header.Time <= ht {
+		log.Crit("error shard time", "now", header.Time, "shard id", shardID, "shard time", ht)
+	}
+	sn := (header.Time - ht) / c.config.Period
+	head = chain.GetHeaderByNumber(header.Number.Uint64() - sn)
+	hash := head.Hash()
+	timestamp = new(big.Int).SetUint64(ht + firstBlockInterval)
+	reward := big.NewInt(c.config.Reward)
+	reward = reward.Mul(reward, rewardBase)
+	reward = reward.Mul(reward, big.NewInt(4))
+	reward = reward.Div(reward, big.NewInt(5))
+
+	err = client.CallContext(ctx, &head, "shards_newShard", shardID, chainID, reward, timestamp, hash)
+	if err != nil {
+		log.Warn("fail to init shard thread", "shard", shardID, "error", err)
+	}
+	err = client.CallContext(ctx, &head, "shards_startShard", shardID)
+	if err != nil {
+		log.Warn("fail to start shard thread", "shard", shardID, "error", err)
+	}
+
+	return nil
+}
+
+type LogCrossTo struct {
+	Index   *big.Int
+	ToShard *big.Int
+	Caller  common.Address
+	Data    []byte
+}
+type CrossTransfer struct {
+	User   common.Address
+	Amount *big.Int
+}
+
+func (c *Phenix) syncEvents(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB) ([]*types.Receipt, error) {
+	info, _ := getShardInfo(header.Extra)
+	var out []*types.Receipt
+	rcps, err := c.syncEventFromShard(chain, header, state, info.Parent, big.NewInt(int64(c.config.ShardID)/2))
 	if err != nil {
 		return nil, err
 	}
 	if len(rcps) > 0 {
-		receipts = append(receipts, rcps...)
+		out = append(out, rcps...)
 	}
+	rcps, err = c.syncEventFromShard(chain, header, state, info.LeftChild, big.NewInt(int64(c.config.ShardID)*2))
+	if err != nil {
+		return nil, err
+	}
+	if len(rcps) > 0 {
+		out = append(out, rcps...)
+	}
+	rcps, err = c.syncEventFromShard(chain, header, state, info.RightChild, big.NewInt(int64(c.config.ShardID)*2+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(rcps) > 0 {
+		out = append(out, rcps...)
+	}
+	return out, nil
+}
 
-	// Assemble and return the final block for sealing
-	return types.NewBlock(header, txs, nil, receipts, trie.NewStackTrie(nil)), nil
+func (c *Phenix) syncEventFromShard(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, cs common.Hash, shardID *big.Int) ([]*types.Receipt, error) {
+	if cs == (common.Hash{}) {
+		return nil, nil
+	}
+	ctx := context.Background()
+	client, err := rpc.DialContext(ctx, c.routerAddress)
+	if err != nil {
+		log.Crit("fail to connect monitor:", c.routerAddress, err)
+	}
+	defer client.Close()
+
+	arg := map[string]interface{}{
+		"address": abi.CrossShardAddr,
+		"topics":  [][]common.Hash{{logSigHash}},
+	}
+	arg["blockHash"] = cs
+
+	var result []types.Log
+	err = client.CallContext(ctx, &result, "proxy_getLogs", shardID, arg)
+	if err != nil {
+		log.Warn("fail to proxy_getLogs", "error", err)
+		return nil, err
+	}
+	var out []*types.Receipt
+	for _, vlog := range result {
+		if len(vlog.Topics) != 5 {
+			log.Crit("crossTo topics length", "length", len(vlog.Topics))
+		}
+		if vlog.Topics[2] != c.shardID {
+			log.Info("CrossTo other shard", "shard", vlog.Topics[2].Big())
+			continue
+		}
+		var event LogCrossTo
+		err = abi.GetABI(abi.ECrossShard).UnpackIntoInterface(&event, "CrossTo", vlog.Data)
+		if err != nil {
+			log.Crit("crossTo UnpackIntoInterface", "error", err)
+		}
+		input, err := abi.GetABI(abi.ECrossShard).Pack("crossFrom", shardID, event.Index, event.Caller, event.Data)
+		if err != nil {
+			log.Error("Can't pack data for crossShard.crossFrom", "error", err)
+			return nil, err
+		}
+		if event.Caller == abi.CrossShardAddr {
+			uint256Ty, _ := gabi.NewType("uint256", "", nil)
+			addressTy, _ := gabi.NewType("address", "", nil)
+			arguments := gabi.Arguments{
+				{
+					Type: addressTy,
+				},
+				{
+					Type: uint256Ty,
+				},
+			}
+			unpacked, err := arguments.Unpack(event.Data)
+			if err != nil {
+				return nil, err
+			}
+			var ct CrossTransfer
+			err = arguments.Copy(&ct, unpacked)
+			if err != nil {
+				return nil, err
+			}
+			state.AddBalance(abi.CrossShardAddr, ct.Amount)
+			log.Info("crossTransfer", "from", shardID, "index", event.Index, "user", ct.User, "amount", ct.Amount)
+		} else {
+			log.Info("crossTransfer", "from", shardID, "index", event.Index, "caller", event.Caller, "data length", len(event.Data))
+		}
+		context := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)
+		rcp, err := ExecuteContract(abi.CrossShardAddr, input, new(big.Int), state, context, &c.chainCfg)
+		if err != nil {
+			log.Error("fail to ExecuteContract:crossFrom", err)
+			return nil, err
+		}
+		out = append(out, rcp)
+	}
+	return out, nil
 }
 
 // Authorize injects a private key into the consensus engine to mint new blocks
@@ -675,10 +1161,13 @@ func (c *Phenix) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 
 	// Sweet, the protocol permits us to sign the block, wait for our time
 	delay := time.Until(time.Unix(int64(header.Time), 0))
-	// log.Info("Seal:", number)
 	v := NewVDFSqrt(nil)
 	x := crypto.Keccak256(header.ParentHash[:], header.Coinbase[:])
-	vr := v.Delay(params.VDFTime, new(big.Int).SetBytes(x))
+	t := params.VDFTime
+	if header.Coinbase == emptySigner {
+		t *= 2
+	}
+	vr := v.Delay(t, new(big.Int).SetBytes(x))
 	header.MixDigest.SetBytes(vr.Bytes())
 
 	if header.Coinbase == emptySigner {
@@ -711,17 +1200,11 @@ func (c *Phenix) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 	return nil
 }
 
-// CalcDifficulty is the difficulty adjustment algorithm. It returns the difficulty
-// that a new block should have:
-// * DIFF_NOTURN(2) if BLOCK_NUMBER % SIGNER_COUNT != SIGNER_INDEX
-// * DIFF_INTURN(1) if BLOCK_NUMBER % SIGNER_COUNT == SIGNER_INDEX
 func (c *Phenix) CalcDifficulty(chain consensus.ChainHeaderReader, time uint64, parent *types.Header) *big.Int {
 	d := parent.Difficulty.Uint64()
 	d = d - d/c.config.Epoch/2
-	// out := c.calcDifficulty(chain, parent.Number.Uint64()+1, c.signer)
 	out := new(big.Int).Set(diffInTurn)
 	out = out.Add(out, big.NewInt(int64(d)))
-	fmt.Println("CalcDifficulty:", parent.Number.Uint64()+1, parent.Difficulty.Uint64(), d, out.Uint64())
 
 	return out
 }
@@ -804,15 +1287,12 @@ func (c *Phenix) getSignersInContract(chain consensus.ChainHeaderReader, header 
 			log.Error("fail to ReadFromContract", err)
 			return nil, err
 		}
-		ret, err := abi.GetABI(abi.EMiner).Unpack("miners", result)
+		var addr common.Address
+		err = abi.GetABI(abi.EMiner).UnpackIntoInterface(&addr, "miners", result)
 		if err != nil {
 			return nil, err
 		}
-		if len(ret) != 1 {
-			return nil, errors.New("invalid params length")
-		}
-		addr, ok := ret[0].(common.Address)
-		if ok && (addr != common.Address{}) {
+		if (addr != common.Address{}) {
 			out = append(out, addr)
 		}
 	}

@@ -62,11 +62,11 @@ var (
 	cliqueChainConfig *params.ChainConfig
 
 	// Test accounts
-	testBankKey, _   = crypto.GenerateKey()
-	testBankAddress  = crypto.PubkeyToAddress(testBankKey.PublicKey)
-	testBankFunds    = big.NewInt(1000000000000000000)
-	testBankKey2, _  = crypto.GenerateKey()
-	testBankAddress2 = crypto.PubkeyToAddress(testBankKey2.PublicKey)
+	testBankKey, _  = crypto.GenerateKey()
+	testBankAddress = crypto.PubkeyToAddress(testBankKey.PublicKey)
+	testBankFunds   = big.NewInt(1000000000000000000)
+	// testBankKey2, _  = crypto.GenerateKey()
+	// testBankAddress2 = crypto.PubkeyToAddress(testBankKey2.PublicKey)
 
 	testUserKey, _  = crypto.GenerateKey()
 	testUserAddress = crypto.PubkeyToAddress(testUserKey.PublicKey)
@@ -140,12 +140,12 @@ func newTestWorkerBackend(t *testing.T, chainConfig *params.ChainConfig, engine 
 			return crypto.Sign(crypto.Keccak256(data), testBankKey)
 		})
 	case *phenix.Phenix:
-		// gspec.ExtraData = make([]byte, 128+common.AddressLength+crypto.SignatureLength)
+		gspec.ExtraData = make([]byte, 128+common.AddressLength+crypto.SignatureLength)
 		// copy(gspec.ExtraData[128:128+common.AddressLength], testBankAddress.Bytes())
-		gspec.ExtraData = make([]byte, 128+common.AddressLength*2+crypto.SignatureLength)
-		gspec.Difficulty = big.NewInt(1000)
+		// gspec.ExtraData = make([]byte, 128+common.AddressLength*2+crypto.SignatureLength)
+		gspec.Difficulty = big.NewInt(1000000)
 		copy(gspec.ExtraData[128:128+common.AddressLength], testBankAddress.Bytes())
-		copy(gspec.ExtraData[128+common.AddressLength:128+common.AddressLength*2], testBankAddress2.Bytes())
+		// copy(gspec.ExtraData[128+common.AddressLength:128+common.AddressLength*2], testBankAddress2.Bytes())
 		var g core.Genesis
 		json.Unmarshal(phenixGen, &g)
 		for k, v := range g.Alloc {
@@ -255,10 +255,6 @@ func testGenerateBlockAndImport(t *testing.T, eType int) {
 		chainConfig = params.AllCliqueProtocolChanges
 		chainConfig.Clique = &params.CliqueConfig{Period: 1, Epoch: 30000}
 		engine = clique.New(chainConfig.Clique, db)
-	case enginePhenix:
-		chainConfig = params.AllPhenixProtocolChanges
-		chainConfig.Phenix = &params.PhenixConfig{Period: 1, Epoch: 8, ShardID: 1, Reward: 1000}
-		engine = phenix.New(chainConfig, db)
 	}
 
 	chainConfig.LondonBlock = big.NewInt(0)
@@ -308,8 +304,10 @@ func TestGenerateBlockAndImportPhenix(t *testing.T) {
 		chainConfig *params.ChainConfig
 		db          = rawdb.NewMemoryDatabase()
 	)
+	// log.Root().SetHandler(log.StreamHandler(os.Stdout, log.TerminalFormat(true)))
+
 	chainConfig = params.AllPhenixProtocolChanges
-	chainConfig.Phenix = &params.PhenixConfig{Period: 1, Epoch: 8, ShardID: 1, Reward: 1000}
+	chainConfig.Phenix = &params.PhenixConfig{Period: 3, Epoch: 8, ShardID: 1, Reward: 1000}
 	engine = phenix.New(chainConfig, db)
 
 	chainConfig.LondonBlock = big.NewInt(0)

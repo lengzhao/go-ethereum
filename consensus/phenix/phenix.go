@@ -530,24 +530,14 @@ func (c *Phenix) Finalize(
 
 // FinalizeAndAssemble implements consensus.Engine, ensuring no uncles are set,
 // nor block rewards given, and returns the final block.
-func (c *Phenix) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, txs []*types.Transaction, uncles []*types.Header, receipts []*types.Receipt) (*types.Block, error) {
-	number := header.Number.Uint64()
+func (c *Phenix) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB,
+	txs []*types.Transaction, uncles []*types.Header, receipts []*types.Receipt) (*types.Block, error) {
 	// log.Info("FinalizeAndAssemble:", number)
 	// If the block is a checkpoint block, verify the signer list
-	if number%c.config.Epoch == 0 {
-		signers, err := c.getSignersInContract(chain, header, state)
-		if err != nil {
-			return nil, err
-		}
-		buffer := make([]byte, len(signers)*common.AddressLength)
-		for i, signer := range signers {
-			copy(buffer[i*common.AddressLength:], signer[:])
-		}
-		if len(header.Extra) < extraShard {
-			header.Extra = make([]byte, extraShard)
-		}
-		header.Extra = append(header.Extra[:extraShard], buffer...)
-		header.Extra = append(header.Extra, bytes.Repeat([]byte{0x00}, extraSeal)...)
+	err := c.setExtra(chain, header, state)
+	if err != nil {
+		log.Warn("fail to set extra of header", "error", err)
+		return nil, err
 	}
 
 	// Finalize block
@@ -663,6 +653,109 @@ func (c *Phenix) checkExtra(chain consensus.ChainHeaderReader, header *types.Hea
 	state.SetBalance(abi.CrossShardAddr, common.Big1)
 
 	return nil
+}
+
+func (c *Phenix) setExtra(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB) error {
+	var info ShardInfo
+	info.ID = c.shardID
+
+	if c.config.ShardID > 1 {
+		ctx := context.Background()
+		client, err := rpc.DialContext(ctx, c.routerAddress)
+		if err != nil {
+			log.Crit("fail to connect monitor:", c.routerAddress, err)
+		}
+		defer client.Close()
+
+		var head *types.Header
+		err = client.CallContext(ctx, &head, "proxy_headerByNumber", new(big.Int).SetUint64(c.config.ShardID/2), nil)
+		if err != nil || head == nil {
+			return errors.New("fail to get parent block")
+		}
+		number := head.Number.Uint64() - (header.Time+shardInterval-head.Time)/c.config.Period
+		err = client.CallContext(ctx, &head, "proxy_headerByNumber", new(big.Int).SetUint64(c.config.ShardID/2), new(big.Int).SetUint64(number))
+		if err != nil || head == nil {
+			return errors.New("fail to get parent block")
+		}
+		info.Parent = head.Hash()
+	}
+	left, err := c.getChildShardHashWithTime(chain, header, state, new(big.Int).SetUint64(c.config.ShardID*2))
+	if err != nil {
+		return err
+	}
+	info.LeftChild = left
+
+	right, err := c.getChildShardHashWithTime(chain, header, state, new(big.Int).SetUint64(c.config.ShardID*2+1))
+	if err != nil {
+		return err
+	}
+	info.RightChild = right
+
+	header.Extra, _ = bEncode(info)
+
+	if header.Number.Uint64()%c.config.Epoch == 0 {
+		signers, err := c.getSignersInContract(chain, header, state)
+		if err != nil {
+			return err
+		}
+		buffer := make([]byte, len(signers)*common.AddressLength)
+		for i, signer := range signers {
+			copy(buffer[i*common.AddressLength:], signer[:])
+		}
+		header.Extra = append(header.Extra[:extraShard], buffer...)
+		header.Extra = append(header.Extra, bytes.Repeat([]byte{0x00}, extraSeal)...)
+	} else {
+		header.Extra = append(header.Extra, make([]byte, extraSeal)...)
+	}
+	return nil
+}
+
+func (c *Phenix) getChildShardHashWithTime(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB,
+	shardID *big.Int) (common.Hash, error) {
+	var out common.Hash
+
+	input, err := abi.GetABI(abi.EShard).Pack("shards", big.NewInt(int64(c.config.ShardID)*2+1))
+	if err != nil {
+		log.Error("Can't pack data for miners", "error", err)
+		return out, err
+	}
+	evmCTX := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)
+	result, err := ReadFromContract(abi.ShardAddr, input, state, evmCTX, &c.chainCfg)
+	if err != nil {
+		log.Error("fail to ReadFromContract", err)
+		return out, err
+	}
+	if len(result) == 0 {
+		return out, nil
+	}
+	var st *big.Int
+	err = abi.GetABI(abi.EShard).UnpackIntoInterface(&st, "shards", result)
+	if err != nil {
+		return out, err
+	}
+	if st.Uint64() == 0 {
+		return out, nil
+	}
+	if st.Uint64()+shardInterval > header.Time {
+		return out, nil
+	}
+
+	ctx := context.Background()
+	client, err := rpc.DialContext(ctx, c.routerAddress)
+	if err != nil {
+		log.Crit("fail to connect monitor:", c.routerAddress, err)
+	}
+	defer client.Close()
+
+	var head *types.Header
+	number := (header.Time - shardInterval - st.Uint64()) / c.config.Period
+	err = client.CallContext(ctx, &head, "proxy_headerByNumber", new(big.Int).SetUint64(c.config.ShardID*2+1),
+		new(big.Int).SetUint64(number))
+	if err != nil || head == nil {
+		return out, errors.New("fail to get right child block")
+	}
+	out = head.Hash()
+	return out, nil
 }
 
 func getShardInfo(in []byte) (*ShardInfo, error) {

@@ -703,10 +703,8 @@ func (c *Phenix) setExtra(chain consensus.ChainHeaderReader, header *types.Heade
 			copy(buffer[i*common.AddressLength:], signer[:])
 		}
 		header.Extra = append(header.Extra[:extraShard], buffer...)
-		header.Extra = append(header.Extra, bytes.Repeat([]byte{0x00}, extraSeal)...)
-	} else {
-		header.Extra = append(header.Extra, make([]byte, extraSeal)...)
 	}
+	header.Extra = append(header.Extra, make([]byte, extraSeal)...)
 	return nil
 }
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"io"
@@ -73,14 +74,36 @@ func initShard(id uint64, fn string) error {
 
 func (s *ShardManager) startShard(id uint64) error {
 	params := []string{}
-	params = append(params, "--datadir", getShardDir(id))
+	dir := getShardDir(id)
+	params = append(params, "--datadir", dir)
 	params = append(params, "--ipcpath", fmt.Sprintf("phenix%d.ipc", id))
+	var localParams map[string]string
+	data, err := ioutil.ReadFile(path.Join(dir, "conf.json"))
+	if err == nil {
+		err = json.Unmarshal(data, &localParams)
+		if err != nil {
+			log.Warn("fail to Unmarshal config of shard:", id, err)
+		}
+	}
+	if len(localParams) == 0 {
+		localParams = make(map[string]string)
+	}
 	for k, v := range s.param {
+		if _, ok := localParams[k]; ok {
+			continue
+		}
 		params = append(params, k)
 		if v != "" {
 			params = append(params, v)
 		}
 	}
+	for k, v := range localParams {
+		params = append(params, k)
+		if v != "" {
+			params = append(params, v)
+		}
+	}
+
 	s.mu.Lock()
 	_, ok := s.shards[id]
 	s.mu.Unlock()

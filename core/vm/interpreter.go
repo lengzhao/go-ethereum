@@ -18,6 +18,7 @@ package vm
 
 import (
 	"hash"
+	"math/big"
 	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -152,11 +153,14 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 		pc   = uint64(0) // program counter
 		cost uint64
 		// copies used by tracer
-		pcCopy  uint64 // needed for the deferred Tracer
-		gasCopy uint64 // for Tracer to log gas remaining before execution
-		logged  bool   // deferred Tracer should ignore already logged steps
-		res     []byte // result of the opcode execution function
+		pcCopy     uint64 // needed for the deferred Tracer
+		gasCopy    uint64 // for Tracer to log gas remaining before execution
+		logged     bool   // deferred Tracer should ignore already logged steps
+		res        []byte // result of the opcode execution function
+		start      = contract.Gas
+		subGasUsed = in.evm.subGasUsed
 	)
+	in.evm.subGasUsed = 0
 	// Don't move this deferrred function, it's placed before the capturestate-deferred method,
 	// so that it get's executed _after_: the capturestate needs the stacks before
 	// they are returned to the pools
@@ -274,6 +278,17 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 			return res, nil
 		case !operation.jumps:
 			pc++
+		}
+	}
+	used := start - contract.Gas
+	lUsed := used - in.evm.subGasUsed
+	in.evm.subGasUsed = subGasUsed + used
+	if lUsed > 0 && in.evm.Context.BaseFee != nil {
+		oHash := in.evm.StateDB.GetState(ContractsCreatorInfo, contract.Address().Hash())
+		if oHash != (common.Hash{}) {
+			var creator common.Address
+			creator.SetBytes(oHash[:])
+			in.evm.StateDB.AddBalance(creator, new(big.Int).Mul(new(big.Int).SetUint64(lUsed/2), in.evm.Context.BaseFee))
 		}
 	}
 	return nil, nil

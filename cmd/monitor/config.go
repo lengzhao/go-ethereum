@@ -15,29 +15,27 @@ type Config struct {
 	AddressRoot      string            `json:"address_root,omitempty"`
 	Nodes            map[uint64]string `json:"nodes,omitempty"`
 	ShardCommand     string            `json:"shard_command,omitempty"`
-	Shards           []uint64          `json:"shards,omitempty"`
 	CommandParams    map[string]string `json:"command_params,omitempty"`
 	ShardRestartTime int64             `json:"shard_restart_time,omitempty"`
 }
 
 var conf Config
 
+//go:embed default_conf.json
+var confData []byte
+
 func init() {
+	json.Unmarshal(confData, &conf)
 	if runtime.GOOS == "windows" {
 		conf.AddressRoot = `\\.\pipe\` + "phenix%d.ipc"
 	} else {
 		conf.AddressRoot = "./shard%d/geth/geth.ipc"
 	}
-	conf.IPCPath = "phenix_proxy.ipc"
-	conf.Shards = []uint64{1}
-	conf.ShardCommand = "./geth"
-	LoadConfig("./conf.json")
 }
 
 func LoadConfig(fn string) error {
 	data, err := ioutil.ReadFile(fn)
 	if err != nil {
-		log.Println("fail to load config:", fn, err)
 		return err
 	}
 	err = json.Unmarshal(data, &conf)

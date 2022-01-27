@@ -154,6 +154,7 @@ func main() {
 		}
 	}
 
+	LoadConfig("./conf.json")
 	mgr := NewShardManager(conf)
 	defer mgr.Stop()
 	listener, _, err := rpc.StartIPCEndpoint(conf.IPCEndpoint(), []rpc.API{{

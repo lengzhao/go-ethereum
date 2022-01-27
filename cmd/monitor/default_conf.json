@@ -1,0 +1,9 @@
+{
+    "shard_command": "./geth",
+    "shard_restart_time": 10,
+    "ipc_path":"phenix_proxy.ipc",
+    "command_params": {
+        "--networkid": "15",
+        "--port": "0"
+    }
+}

@@ -36,6 +36,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/misc"
 	"github.com/ethereum/go-ethereum/consensus/phenix/abi"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -418,19 +419,19 @@ func (c *Phenix) Finalize(
 	chain consensus.ChainHeaderReader,
 	header *types.Header, state *state.StateDB,
 	txs []*types.Transaction,
-	uncles []*types.Header) ([]*types.Receipt, error) {
+	uncles []*types.Header) error {
 
 	var out []*types.Receipt
 	var err error
 
 	if header.Coinbase == emptySigner && len(txs) > 0 {
-		return nil, fmt.Errorf("empty signer,but exist tx")
+		return fmt.Errorf("empty signer,but exist tx")
 	}
 
 	err = c.checkExtra(chain, header, state)
 	if err != nil {
 		log.Warn("checkExtra", "number", header.Number, "error", err)
-		return nil, err
+		return err
 	}
 
 	reward := big.NewInt(c.config.Reward)
@@ -442,7 +443,7 @@ func (c *Phenix) Finalize(
 		signers, err := c.getSignersInContract(chain, header, state)
 		if err != nil {
 			fmt.Println("fail to getSignersInContract:", err)
-			return nil, err
+			return err
 		}
 		buffer := make([]byte, len(signers)*common.AddressLength)
 		for i, signer := range signers {
@@ -451,14 +452,14 @@ func (c *Phenix) Finalize(
 		extraSuffix := len(header.Extra) - extraSeal
 		if !bytes.Equal(header.Extra[extraShard:extraSuffix], buffer) {
 			fmt.Println("different Extra:")
-			return nil, errMismatchingCheckpointSigners
+			return errMismatchingCheckpointSigners
 		}
 	}
 
 	if number == 1 {
 		out, err = c.initSystemContract(chain, header, state)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 
@@ -466,13 +467,13 @@ func (c *Phenix) Finalize(
 		input, err := abi.GetABI(abi.EMiner).Pack("updateNextMiners")
 		if err != nil {
 			log.Error("Can't pack data for Miner.updateNextMiners", "error", err)
-			return nil, err
+			return err
 		}
 		context := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)
 		result, err := ExecuteContract(abi.MinerAddr, input, new(big.Int), state, context, &c.chainCfg)
 		if err != nil {
 			log.Error("fail to ExecuteContract", err)
-			return nil, err
+			return err
 		}
 		out = append(out, result)
 	}
@@ -483,17 +484,17 @@ func (c *Phenix) Finalize(
 		input, err := abi.GetABI(abi.EMiner).Pack("reward")
 		if err != nil {
 			log.Error("Can't pack data for Miner.reward", "error", err)
-			return nil, err
+			return err
 		}
 		context := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)
 		result, err := ExecuteContract(abi.MinerAddr, input, reward, state, context, &c.chainCfg)
 		if err != nil {
 			log.Error("fail to ExecuteContract(reward)", "error", err)
-			return nil, err
+			return err
 		}
 		if result.Status != types.ReceiptStatusSuccessful {
 			log.Error("fail to ExecuteContract(reward)", "Status", result.Status)
-			return nil, err
+			return err
 		}
 		out = append(out, result)
 	} else if hopeMiner != emptySigner {
@@ -501,56 +502,54 @@ func (c *Phenix) Finalize(
 		input, err := abi.GetABI(abi.EMiner).Pack("punish", hopeMiner, reward)
 		if err != nil {
 			log.Error("Can't pack data for Miner.reward", "hope miner", hopeMiner, "error", err)
-			return nil, err
+			return err
 		}
 		context := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)
 		result, err := ExecuteContract(abi.MinerAddr, input, new(big.Int), state, context, &c.chainCfg)
 		if err != nil {
 			log.Error("fail to ExecuteContract(punish)", "hope miner", hopeMiner, "error", err)
-			return nil, err
+			return err
 		}
 		if result.Status != types.ReceiptStatusSuccessful {
 			log.Error("fail to ExecuteContract(punish)", "Status", result.Status, "hope miner", hopeMiner)
-			return nil, err
+			return err
 		}
 		out = append(out, result)
 	}
 	rcps, err := c.syncEvents(chain, header, state)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if len(rcps) > 0 {
 		out = append(out, rcps...)
 	}
+	rawdb.WriteReceipts(c.db, header.Hash(), 0, out)
 
 	header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
 	header.UncleHash = types.CalcUncleHash(nil)
-	return out, nil
+	return nil
 }
 
 // FinalizeAndAssemble implements consensus.Engine, ensuring no uncles are set,
 // nor block rewards given, and returns the final block.
 func (c *Phenix) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB,
-	txs []*types.Transaction, uncles []*types.Header, receipts []*types.Receipt) (*types.Block, []*types.Receipt, error) {
+	txs []*types.Transaction, uncles []*types.Header, receipts []*types.Receipt) (*types.Block, error) {
 	// log.Info("FinalizeAndAssemble:", number)
 	// If the block is a checkpoint block, verify the signer list
 	err := c.setExtra(chain, header, state)
 	if err != nil {
 		log.Warn("fail to set extra of header", "error", err)
-		return nil, nil, err
+		return nil, err
 	}
 
 	// Finalize block
-	rcps, err := c.Finalize(chain, header, state, txs, uncles)
+	err = c.Finalize(chain, header, state, txs, uncles)
 	if err != nil {
-		return nil, nil, err
-	}
-	if len(rcps) > 0 {
-		receipts = append(receipts, rcps...)
+		return nil, err
 	}
 
 	// Assemble and return the final block for sealing
-	return types.NewBlock(header, txs, nil, receipts, trie.NewStackTrie(nil)), receipts, nil
+	return types.NewBlock(header, txs, nil, receipts, trie.NewStackTrie(nil)), nil
 }
 
 func (c *Phenix) initSystemContract(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB) ([]*types.Receipt, error) {

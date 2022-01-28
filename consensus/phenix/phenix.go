@@ -531,26 +531,26 @@ func (c *Phenix) Finalize(
 // FinalizeAndAssemble implements consensus.Engine, ensuring no uncles are set,
 // nor block rewards given, and returns the final block.
 func (c *Phenix) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB,
-	txs []*types.Transaction, uncles []*types.Header, receipts []*types.Receipt) (*types.Block, error) {
+	txs []*types.Transaction, uncles []*types.Header, receipts []*types.Receipt) (*types.Block, []*types.Receipt, error) {
 	// log.Info("FinalizeAndAssemble:", number)
 	// If the block is a checkpoint block, verify the signer list
 	err := c.setExtra(chain, header, state)
 	if err != nil {
 		log.Warn("fail to set extra of header", "error", err)
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Finalize block
 	rcps, err := c.Finalize(chain, header, state, txs, uncles)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(rcps) > 0 {
 		receipts = append(receipts, rcps...)
 	}
 
 	// Assemble and return the final block for sealing
-	return types.NewBlock(header, txs, nil, receipts, trie.NewStackTrie(nil)), nil
+	return types.NewBlock(header, txs, nil, receipts, trie.NewStackTrie(nil)), receipts, nil
 }
 
 func (c *Phenix) initSystemContract(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB) ([]*types.Receipt, error) {

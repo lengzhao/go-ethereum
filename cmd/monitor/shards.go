@@ -59,7 +59,6 @@ func getShardDir(id uint64) string {
 
 func initShard(id uint64, fn string) error {
 	dirName := getShardDir(id)
-	os.Mkdir(dirName, 0666)
 	cmd := exec.Command(conf.ShardCommand, "init", "--datadir", dirName, fn)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -73,37 +72,6 @@ func initShard(id uint64, fn string) error {
 }
 
 func (s *ShardManager) startShard(id uint64) error {
-	params := []string{}
-	dir := getShardDir(id)
-	params = append(params, "--datadir", dir)
-	params = append(params, "--ipcpath", fmt.Sprintf("phenix%d.ipc", id))
-	var localParams map[string]string
-	data, err := ioutil.ReadFile(path.Join(dir, "conf.json"))
-	if err == nil {
-		err = json.Unmarshal(data, &localParams)
-		if err != nil {
-			log.Warn("fail to Unmarshal config of shard:", id, err)
-		}
-	}
-	if len(localParams) == 0 {
-		localParams = make(map[string]string)
-	}
-	for k, v := range s.param {
-		if _, ok := localParams[k]; ok {
-			continue
-		}
-		params = append(params, k)
-		if v != "" {
-			params = append(params, v)
-		}
-	}
-	for k, v := range localParams {
-		params = append(params, k)
-		if v != "" {
-			params = append(params, v)
-		}
-	}
-
 	s.mu.Lock()
 	_, ok := s.shards[id]
 	s.mu.Unlock()
@@ -122,13 +90,43 @@ func (s *ShardManager) startShard(id uint64) error {
 		defer f.Close()
 	}
 	for {
+		params := []string{}
+		dir := getShardDir(id)
+		params = append(params, "--datadir", dir)
+		params = append(params, "--ipcpath", fmt.Sprintf("phenix%d.ipc", id))
+		var localParams map[string]string
+		data, err := ioutil.ReadFile(path.Join(dir, "conf.json"))
+		if err == nil {
+			err = json.Unmarshal(data, &localParams)
+			if err != nil {
+				log.Warn("fail to Unmarshal config of shard:", id, err)
+			}
+		}
+		if len(localParams) == 0 {
+			localParams = make(map[string]string)
+		}
+		for k, v := range s.param {
+			if _, ok := localParams[k]; ok {
+				continue
+			}
+			params = append(params, k)
+			if v != "" {
+				params = append(params, v)
+			}
+		}
+		for k, v := range localParams {
+			params = append(params, k)
+			if v != "" {
+				params = append(params, v)
+			}
+		}
 		cmd := exec.Command(s.command, params...)
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile
 		s.mu.Lock()
 		s.shards[id] = cmd
 		s.mu.Unlock()
-		err := cmd.Run()
+		err = cmd.Run()
 		if err != nil {
 			log.Warn("run shard thread:", "id", id, "error", err)
 		}

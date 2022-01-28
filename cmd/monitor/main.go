@@ -138,11 +138,26 @@ func main() {
 
 	printNotice(&nodeKey.PublicKey, *realaddr)
 
+	LoadConfig("./conf.json")
+	var bootnodes []*enode.Node
+	for _, url := range conf.Bootnodes {
+		if url == "" {
+			continue
+		}
+		node, err := enode.Parse(enode.ValidSchemes, url)
+		if err != nil {
+			log.Crit("Bootstrap URL invalid", "enode", url, "err", err)
+			continue
+		}
+		bootnodes = append(bootnodes, node)
+	}
+
 	db, _ := enode.OpenDB("")
 	ln := enode.NewLocalNode(db, nodeKey)
 	cfg := discover.Config{
 		PrivateKey:  nodeKey,
 		NetRestrict: restrictList,
+		Bootnodes:   bootnodes,
 	}
 	if *runv5 {
 		if _, err := discover.ListenV5(conn, ln, cfg); err != nil {
@@ -154,7 +169,6 @@ func main() {
 		}
 	}
 
-	LoadConfig("./conf.json")
 	mgr := NewShardManager(conf)
 	defer mgr.Stop()
 	listener, _, err := rpc.StartIPCEndpoint(conf.IPCEndpoint(), []rpc.API{{

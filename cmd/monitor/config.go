@@ -18,6 +18,7 @@ type Config struct {
 	ShardCommand     string            `json:"shard_command,omitempty"`
 	CommandParams    map[string]string `json:"command_params,omitempty"`
 	ShardRestartTime int64             `json:"shard_restart_time,omitempty"`
+	Bootnodes        []string          `json:"bootnodes,omitempty"`
 }
 
 var conf Config
@@ -30,7 +31,7 @@ func init() {
 	if runtime.GOOS == "windows" {
 		conf.AddressRoot = `\\.\pipe\` + "phenix%d.ipc"
 	} else {
-		conf.AddressRoot = "./shard%d/geth/geth.ipc"
+		conf.AddressRoot = "./shard%d/phenix%d.ipc"
 	}
 }
 
@@ -63,5 +64,13 @@ func (c *Config) IPCEndpoint() string {
 }
 
 func (c *Config) GetAddress(shardID *big.Int) string {
-	return fmt.Sprintf(c.AddressRoot, shardID.Uint64())
+	count := strings.Count(c.AddressRoot, "%")
+	switch count {
+	case 1:
+		return fmt.Sprintf(c.AddressRoot, shardID.Uint64())
+	case 2:
+		return fmt.Sprintf(c.AddressRoot, shardID.Uint64(), shardID.Uint64())
+	default:
+		return c.AddressRoot
+	}
 }

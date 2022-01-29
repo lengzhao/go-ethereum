@@ -36,7 +36,6 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/misc"
 	"github.com/ethereum/go-ethereum/consensus/phenix/abi"
 	"github.com/ethereum/go-ethereum/core"
-	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -421,7 +420,7 @@ func (c *Phenix) Finalize(
 	txs []*types.Transaction,
 	uncles []*types.Header) error {
 
-	var out []*types.Receipt
+	var out types.Receipts
 	var err error
 
 	if header.Coinbase == emptySigner && len(txs) > 0 {
@@ -523,10 +522,19 @@ func (c *Phenix) Finalize(
 	if len(rcps) > 0 {
 		out = append(out, rcps...)
 	}
-	rawdb.WriteReceipts(c.db, header.Hash(), 0, out)
 
 	header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
 	header.UncleHash = types.CalcUncleHash(nil)
+	h := header.Hash()
+	for i, receipt := range out {
+		receipt.BlockHash = h
+		out[i] = receipt
+		bytes, _ := rlp.EncodeToBytes(receipt)
+		c.db.Put(append([]byte("ptx-"), receipt.TxHash[:]...), bytes)
+	}
+	bytes, _ := rlp.EncodeToBytes(out)
+	c.db.Put(append([]byte("phenix-"), h[:]...), bytes)
+
 	return nil
 }
 

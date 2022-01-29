@@ -79,9 +79,9 @@ func ExecuteContract(contract common.Address, input []byte, amount *big.Int, sta
 	// Set the receipt logs and create the bloom filter.
 	receipt.Logs = state.GetLogs(ths, common.Hash{})
 	receipt.Bloom = types.CreateBloom(types.Receipts{receipt})
-	// receipt.BlockHash = blockHash
 	receipt.BlockNumber = context.BlockNumber
 	receipt.TransactionIndex = uint(ti)
+	receipt.ContractAddress = *msg.To()
 
 	return receipt, nil
 }

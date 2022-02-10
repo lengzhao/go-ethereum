@@ -12,10 +12,11 @@
         "berlinBlock":0,
         "londonBlock":0,
         "phenix": {
-            "period": 3,
+            "period": 4,
             "epoch": 20000,
             "shard_id":1,
-            "reward":1000
+            "reward":1000,
+            "vdf_times":20000
         }
     },
     "difficulty": "400000",

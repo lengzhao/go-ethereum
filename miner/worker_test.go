@@ -307,7 +307,7 @@ func TestGenerateBlockAndImportPhenix(t *testing.T) {
 	// log.Root().SetHandler(log.StreamHandler(os.Stdout, log.TerminalFormat(true)))
 
 	chainConfig = params.AllPhenixProtocolChanges
-	chainConfig.Phenix = &params.PhenixConfig{Period: 3, Epoch: 8, ShardID: 1, Reward: 1000}
+	chainConfig.Phenix = &params.PhenixConfig{Period: 3, Epoch: 8, ShardID: 1, Reward: 1000, VDFTimes: 1000}
 	engine = phenix.New(chainConfig, db)
 
 	chainConfig.LondonBlock = big.NewInt(0)

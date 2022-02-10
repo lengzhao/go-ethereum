@@ -259,10 +259,8 @@ func (c *Phenix) verifyHeader(chain consensus.ChainHeaderReader, header *types.H
 
 	v := NewVDFSqrt(nil)
 	x := crypto.Keccak256(header.ParentHash[:], header.Coinbase[:])
-	t := params.VDFTime
-	if header.Coinbase == emptySigner {
-		t *= 2
-	}
+	t := c.config.VDFTimes
+
 	rst := v.Verify(t, new(big.Int).SetBytes(x), new(big.Int).SetBytes(header.MixDigest[:]))
 	if !rst {
 		return errInvalidMixDigest
@@ -1257,16 +1255,15 @@ func (c *Phenix) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 	signer, signFn := c.signer, c.signFn
 	c.lock.RUnlock()
 
-	// Sweet, the protocol permits us to sign the block, wait for our time
-	delay := time.Until(time.Unix(int64(header.Time), 0))
 	v := NewVDFSqrt(nil)
 	x := crypto.Keccak256(header.ParentHash[:], header.Coinbase[:])
-	t := params.VDFTime
-	if header.Coinbase == emptySigner {
-		t *= 2
-	}
+	t := c.config.VDFTimes
+
 	vr := v.Delay(t, new(big.Int).SetBytes(x))
 	header.MixDigest.SetBytes(vr.Bytes())
+
+	// Sweet, the protocol permits us to sign the block, wait for our time
+	delay := time.Until(time.Unix(int64(header.Time), 0))
 
 	if header.Coinbase == emptySigner {
 		copy(header.Extra[len(header.Extra)-extraSeal:], make([]byte, extraSeal))

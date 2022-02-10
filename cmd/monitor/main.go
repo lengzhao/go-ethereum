@@ -51,7 +51,7 @@ func main() {
 		runv5       = flag.Bool("v5", false, "run a v5 topic discovery bootnode")
 		verbosity   = flag.Int("verbosity", int(log.LvlInfo), "log verbosity (0-5)")
 		vmodule     = flag.String("vmodule", "", "log verbosity pattern")
-		dumpGenFile = flag.String("dumpGenFile", "", "dump genesis to block of shard1")
+		init        = flag.Bool("init", false, "init the first shard")
 
 		nodeKey *ecdsa.PrivateKey
 		err     error
@@ -68,13 +68,14 @@ func main() {
 		utils.Fatalf("-nat: %v", err)
 	}
 	switch {
-	case *dumpGenFile != "":
-		err = ioutil.WriteFile(*dumpGenFile, shard1Gen, 0600)
+	case *init:
+		fn := "./shard1_gen.json"
+		err = ioutil.WriteFile(fn, shard1Gen, 0600)
 		if err != nil {
-			utils.Fatalf("fail to dump genesis file, %v", err)
+			utils.Fatalf("fail to dump genesis file,file name:%s, %v", fn, err)
 		}
 
-		err := initShard(1, *dumpGenFile)
+		err := initShard(1, fn)
 		if err != nil {
 			utils.Fatalf("fail to init shard1, %v", err)
 		}

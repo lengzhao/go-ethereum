@@ -29,7 +29,10 @@ import (
 	"github.com/ethereum/go-ethereum/crypto/blake2b"
 	"github.com/ethereum/go-ethereum/crypto/bls12381"
 	"github.com/ethereum/go-ethereum/crypto/bn256"
+	"github.com/ethereum/go-ethereum/ethdb/memorydb"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/ethereum/go-ethereum/trie"
 
 	//lint:ignore SA1019 Needed for precompile
 	"golang.org/x/crypto/ripemd160"
@@ -80,6 +83,7 @@ var PrecompiledContractsIstanbul = map[common.Address]PrecompiledContract{
 	common.BytesToAddress([]byte{8}):   &bn256PairingIstanbul{},
 	common.BytesToAddress([]byte{9}):   &blake2F{},
 	common.BytesToAddress([]byte{200}): &useGas{},
+	common.BytesToAddress([]byte{201}): &proofVerify{},
 }
 
 // PrecompiledContractsBerlin contains the default set of pre-compiled Ethereum
@@ -95,6 +99,7 @@ var PrecompiledContractsBerlin = map[common.Address]PrecompiledContract{
 	common.BytesToAddress([]byte{8}):   &bn256PairingIstanbul{},
 	common.BytesToAddress([]byte{9}):   &blake2F{},
 	common.BytesToAddress([]byte{200}): &useGas{},
+	common.BytesToAddress([]byte{201}): &proofVerify{},
 }
 
 // PrecompiledContractsBLS contains the set of pre-compiled Ethereum
@@ -1062,4 +1067,41 @@ func (c *useGas) Run(input []byte) ([]byte, error) {
 		return nil, fmt.Errorf("error input length")
 	}
 	return input, nil
+}
+
+// NodeList stores an ordered list of trie nodes. It implements ethdb.KeyValueWriter.
+type NodeList []rlp.RawValue
+
+// NodeSet converts the node list to a NodeSet
+func (n NodeList) NodeSet() *memorydb.Database {
+	db := memorydb.New()
+	for _, node := range n {
+		db.Put(crypto.Keccak256(node), node)
+	}
+	return db
+}
+
+// proofVerify implemented as a native contract.
+type proofVerify struct{}
+
+func (c *proofVerify) RequiredGas(input []byte) uint64 {
+	return uint64(len(input)) * 400
+}
+
+func (c *proofVerify) Run(input []byte) ([]byte, error) {
+	var (
+		root  = common.BytesToHash(getData(input, 0, 32))
+		key   = common.BytesToHash(getData(input, 32, 32))
+		proof = getData(input, 64, 100000)
+		node  NodeList
+	)
+	err := rlp.DecodeBytes(proof, &node)
+	if err != nil {
+		return nil, err
+	}
+	value, err := trie.VerifyProof(root, key[:], node.NodeSet())
+	if err != nil {
+		return nil, err
+	}
+	return value, nil
 }

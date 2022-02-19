@@ -70,7 +70,7 @@ var (
 	shardInterval      uint64 = 5 * 30
 
 	// emptySigner = common.HexToAddress("0x01")
-	emptySigner  = abi.AirDropAddr
+	emptySigner  = abi.ReservedAddr
 	nulSignature = make([]byte, extraSeal)
 	shardCreator = common.HexToAddress("0x8a170A0860F8B96F8B8ffBfADd000195Dd0512ae")
 
@@ -495,7 +495,6 @@ func (c *Phenix) Finalize(
 		}
 		out = append(out, result)
 	} else if hopeMiner != emptySigner {
-		state.AddBalance(abi.AirDropAddr, reward)
 		input, err := abi.GetABI(abi.EMiner).Pack("punish", hopeMiner, reward)
 		if err != nil {
 			log.Error("Can't pack data for Miner.reward", "hope miner", hopeMiner, "error", err)

@@ -21,7 +21,7 @@ var (
 	sysProxy []byte
 
 	DeployerAddr       = common.HexToAddress("0x0000000000000000000000000000000000000F01")
-	AirDropAddr        = common.HexToAddress("0x0000000000000000000000000000000000000f02")
+	ReservedAddr       = common.HexToAddress("0x0000000000000000000000000000000000000f02")
 	CrossShardAddr     = common.HexToAddress("0x0000000000000000000000000000000000000F03")
 	MinerAddr          = common.HexToAddress("0x0000000000000000000000000000000000000f04")
 	ShardAddr          = common.HexToAddress("0x0000000000000000000000000000000000000f05")

@@ -322,7 +322,7 @@ func TestGenerateBlockAndImportPhenix(t *testing.T) {
 
 	// Ignore empty commit here for less noise.
 	w.skipSealHook = func(task *task) bool {
-		if task.block.Coinbase() == abi.AirDropAddr {
+		if task.block.Coinbase() == abi.ReservedAddr {
 			return false
 		}
 		return len(task.receipts) == 0

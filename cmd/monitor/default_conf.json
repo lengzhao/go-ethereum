@@ -2,9 +2,11 @@
     "shard_command": "./geth",
     "shard_restart_time": 10,
     "ipc_path":"phenix_proxy.ipc",
-    "bootnodes":[],
+    "bootnodes":[
+        "enode://44addd93f7d109e5ac30bd5c63c7b4d5bebed6d4aa51fba627fa1664d1dfd213d499317c59e1c25955caf6ee204e26e80d43d6ccd11313d35ec599eb747c6f6d@govm.top:30301"
+    ],
     "command_params": {
-        "--networkid": "15",
+        "--networkid": "791",
         "--port": "0"
     }
 }

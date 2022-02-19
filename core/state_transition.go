@@ -317,7 +317,9 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 	if contractCreation {
 		var contractAddr common.Address
 		ret, contractAddr, st.gas, vmerr = st.evm.Create(sender, st.data, st.gas, st.value)
-		st.state.SetState(vm.ContractsCreatorInfo, contractAddr.Hash(), st.evm.Origin.Hash())
+		if st.evm.ChainConfig().Phenix != nil {
+			st.state.SetState(vm.ContractsCreatorInfo, contractAddr.Hash(), st.evm.Origin.Hash())
+		}
 	} else {
 		// Increment the nonce for the next transaction
 		st.state.SetNonce(msg.From(), st.state.GetNonce(sender.Address())+1)

@@ -3,10 +3,12 @@
     "shard_restart_time": 10,
     "ipc_path":"phenix_proxy.ipc",
     "bootnodes":[
-        "enode://44addd93f7d109e5ac30bd5c63c7b4d5bebed6d4aa51fba627fa1664d1dfd213d499317c59e1c25955caf6ee204e26e80d43d6ccd11313d35ec599eb747c6f6d@govm.top:30301"
+        "enode://44addd93f7d109e5ac30bd5c63c7b4d5bebed6d4aa51fba627fa1664d1dfd213d499317c59e1c25955caf6ee204e26e80d43d6ccd11313d35ec599eb747c6f6d@govm.top:30301",
+        "enode://6b6b30b7c9741ee16a9bf99f5efc08cff3f8983bf1d9dd73d7068ff3f9b4fbaf9d05a303fc028cde3c599ff14feacaabb923122f7300c4a74d295ead2b74f713@govm.net:30301"
     ],
     "command_params": {
         "--networkid": "791",
-        "--port": "0"
+        "--port": "0",
+        "--bootnodes":"enode://44addd93f7d109e5ac30bd5c63c7b4d5bebed6d4aa51fba627fa1664d1dfd213d499317c59e1c25955caf6ee204e26e80d43d6ccd11313d35ec599eb747c6f6d@govm.top:30301,enode://6b6b30b7c9741ee16a9bf99f5efc08cff3f8983bf1d9dd73d7068ff3f9b4fbaf9d05a303fc028cde3c599ff14feacaabb923122f7300c4a74d295ead2b74f713@govm.net:30301"
     }
 }

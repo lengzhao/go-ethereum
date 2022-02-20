@@ -99,7 +99,7 @@ func (s *ShardManager) startShard(id uint64) error {
 		if err == nil {
 			err = json.Unmarshal(data, &localParams)
 			if err != nil {
-				log.Warn("fail to Unmarshal config of shard:", id, err)
+				log.Warn("fail to Unmarshal config of shard:", "id", id, "error", err)
 			}
 		}
 		if len(localParams) == 0 {
@@ -126,6 +126,7 @@ func (s *ShardManager) startShard(id uint64) error {
 		s.mu.Lock()
 		s.shards[id] = cmd
 		s.mu.Unlock()
+		log.Info("start shard", "id", id, "cmd", cmd.String())
 		err = cmd.Run()
 		if err != nil {
 			log.Warn("run shard thread:", "id", id, "error", err)

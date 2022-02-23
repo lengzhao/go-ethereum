@@ -36,6 +36,8 @@ type ShardManager struct {
 //go:embed shard.json.gotmpl
 var shardxGen string
 
+var bnKey = "--bootnodes"
+
 func NewShardManager(c Config) *ShardManager {
 	var out ShardManager
 	out.shards = make(map[uint64]*exec.Cmd)
@@ -89,6 +91,12 @@ func (s *ShardManager) startShard(id uint64) error {
 		logFile = f
 		defer f.Close()
 	}
+	var array []string
+	for _, it := range conf.Bootnodes {
+		k := fmt.Sprintf(it.Enode, it.StartPort+id-1)
+		array = append(array, k)
+	}
+	var bootnodes = strings.Join(array, ",")
 	for {
 		params := []string{}
 		dir := getShardDir(id)
@@ -119,6 +127,12 @@ func (s *ShardManager) startShard(id uint64) error {
 			if v != "" {
 				params = append(params, v)
 			}
+		}
+		if _, ok := localParams["--port"]; !ok {
+			params = append(params, "--port", fmt.Sprintf("%d", conf.StartPort+id-1))
+		}
+		if _, ok := localParams[bnKey]; !ok {
+			params = append(params, bnKey, bootnodes)
 		}
 		cmd := exec.Command(s.command, params...)
 		cmd.Stdout = logFile

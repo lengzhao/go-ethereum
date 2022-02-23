@@ -11,14 +11,20 @@ import (
 	"strings"
 )
 
+type BootNode struct {
+	Enode     string `json:"enode,omitempty"`
+	StartPort uint64 `json:"start_port,omitempty"`
+}
+
 type Config struct {
 	IPCPath          string            `json:"ipc_path,omitempty"`
 	AddressRoot      string            `json:"address_root,omitempty"`
-	Nodes            map[uint64]string `json:"nodes,omitempty"`
+	StartPort        uint64            `json:"start_port,omitempty"`
+	ShardNodes       map[uint64]string `json:"shard_nodes,omitempty"`
 	ShardCommand     string            `json:"shard_command,omitempty"`
 	CommandParams    map[string]string `json:"command_params,omitempty"`
 	ShardRestartTime int64             `json:"shard_restart_time,omitempty"`
-	Bootnodes        []string          `json:"bootnodes,omitempty"`
+	Bootnodes        []BootNode        `json:"bootnodes,omitempty"`
 }
 
 var conf Config

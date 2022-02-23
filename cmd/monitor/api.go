@@ -29,7 +29,7 @@ func (api *API) getClient(shardID *big.Int) (*ethclient.Client, error) {
 	if ok {
 		return c, nil
 	}
-	addr, ok := api.conf.Nodes[id]
+	addr, ok := api.conf.ShardNodes[id]
 	if !ok {
 		addr = api.conf.GetAddress(shardID)
 	}

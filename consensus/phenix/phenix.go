@@ -503,11 +503,11 @@ func (c *Phenix) Finalize(
 		context := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)
 		result, err := ExecuteContract(abi.MinerAddr, input, new(big.Int), state, context, &c.chainCfg)
 		if err != nil {
-			log.Error("fail to ExecuteContract(punish)", "hope miner", hopeMiner, "error", err)
+			log.Error("fail to ExecuteContract(punish)", "hope miner", hopeMiner, "coinbase", header.Coinbase, "error", err)
 			return err
 		}
 		if result.Status != types.ReceiptStatusSuccessful {
-			log.Error("fail to ExecuteContract(punish)", "Status", result.Status, "hope miner", hopeMiner)
+			log.Error("fail to ExecuteContract(punish)", "Status", result.Status, "hope miner", hopeMiner, "coinbase", header.Coinbase)
 			return err
 		}
 		out = append(out, result)
@@ -1274,6 +1274,7 @@ func (c *Phenix) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 		}
 		copy(header.Extra[len(header.Extra)-extraSeal:], sighash)
 	}
+	log.Info("Seal", "number", header.Number, "coinbase", header.Coinbase)
 
 	// Wait until sealing is terminated or delay timeout.
 	log.Trace("Waiting for slot to sign and propagate", "delay", common.PrettyDuration(delay))

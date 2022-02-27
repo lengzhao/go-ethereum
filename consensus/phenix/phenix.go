@@ -461,9 +461,9 @@ func (c *Phenix) Finalize(
 	}
 
 	if number%c.config.Epoch == c.config.Epoch/2 {
-		input, err := abi.GetABI(abi.EMiner).Pack("updateNextMiners")
+		input, err := abi.GetABI(abi.EMiner).Pack("updateMiners")
 		if err != nil {
-			log.Error("Can't pack data for Miner.updateNextMiners", "error", err)
+			log.Error("Can't pack data for Miner.updateMiners", "error", err)
 			return err
 		}
 		context := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)

@@ -34,11 +34,12 @@ var shard1Gen []byte
 
 func main() {
 	var (
-		verbosity   = flag.Int("verbosity", int(log.LvlInfo), "log verbosity (0-5)")
-		vmodule     = flag.String("vmodule", "", "log verbosity pattern")
-		init        = flag.Bool("init", false, "init the first shard")
-		nodeKeyFile = flag.String("nodekey", "node.key", "private key filename of p2p node, create when init")
-		err         error
+		verbosity = flag.Int("verbosity", int(log.LvlInfo), "log verbosity (0-5)")
+		vmodule   = flag.String("vmodule", "", "log verbosity pattern")
+		init      = flag.Bool("init", false, "init the first shard")
+		nodeKey   = flag.Bool("nodeKey", false, "gen nodekey(node.key)")
+		cfg       = flag.Bool("conf", false, "dump config file")
+		err       error
 	)
 	flag.Parse()
 
@@ -47,6 +48,7 @@ func main() {
 	glogger.Vmodule(*vmodule)
 	log.Root().SetHandler(glogger)
 
+	var exit bool
 	if *init {
 		fn := "./shard1_gen.json"
 		err = ioutil.WriteFile(fn, shard1Gen, 0600)
@@ -58,13 +60,27 @@ func main() {
 		if err != nil {
 			utils.Fatalf("fail to init shard1, %v", err)
 		}
+		exit = true
+	}
+	if *nodeKey {
 		nodeKey, err := crypto.GenerateKey()
 		if err != nil {
 			utils.Fatalf("could not generate key: %v", err)
 		}
-		if err = crypto.SaveECDSA(*nodeKeyFile, nodeKey); err != nil {
+		if err = crypto.SaveECDSA("node.key", nodeKey); err != nil {
 			utils.Fatalf("%v", err)
 		}
+		exit = true
+	}
+	if *cfg {
+		fn := "./conf.json"
+		err = ioutil.WriteFile(fn, confData, 0600)
+		if err != nil {
+			utils.Fatalf("fail to dump config file,file name:%s, %v", fn, err)
+		}
+		exit = true
+	}
+	if exit {
 		return
 	}
 	LoadConfig("./conf.json")

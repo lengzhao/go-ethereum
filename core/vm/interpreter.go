@@ -275,6 +275,20 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 		case operation.reverts:
 			return res, ErrExecutionReverted
 		case operation.halts:
+			if in.evm.Context.BaseFee == nil {
+				return res, nil
+			}
+			used := start - contract.Gas
+			lUsed := used - in.evm.subGasUsed
+			in.evm.subGasUsed = subGasUsed + used
+			if lUsed > 0 {
+				oHash := in.evm.StateDB.GetState(ContractsCreatorInfo, contract.Address().Hash())
+				if oHash != (common.Hash{}) {
+					var creator common.Address
+					creator.SetBytes(oHash[:])
+					in.evm.StateDB.AddBalance(creator, new(big.Int).Mul(new(big.Int).SetUint64(lUsed/2), in.evm.Context.BaseFee))
+				}
+			}
 			return res, nil
 		case !operation.jumps:
 			pc++

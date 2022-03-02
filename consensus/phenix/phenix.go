@@ -330,12 +330,8 @@ func (c *Phenix) verifyCascadingFields(chain consensus.ChainHeaderReader, header
 		if header.Difficulty.Cmp(hopeDifficulty) != 0 {
 			return errWrongDifficulty
 		}
-	} else if c.getMiner(chain, number) == header.Coinbase {
-		if header.Difficulty.Cmp(hopeDifficulty) != 0 {
-			return errWrongDifficulty
-		}
-	} else {
-		return fmt.Errorf("invalid Coinbase: %s", header.Coinbase.String())
+	} else if header.Difficulty.Cmp(hopeDifficulty) != 0 {
+		return errWrongDifficulty
 	}
 	if err := misc.VerifyEip1559Header(chain.Config(), parent, header); err != nil {
 		// Verify the header's EIP-1559 attributes.
@@ -495,6 +491,9 @@ func (c *Phenix) Finalize(
 		}
 		out = append(out, result)
 	} else if hopeMiner != emptySigner {
+		if header.Coinbase != emptySigner {
+			return fmt.Errorf("error coinbase")
+		}
 		input, err := abi.GetABI(abi.EMiner).Pack("punish", hopeMiner, reward)
 		if err != nil {
 			log.Error("Can't pack data for Miner.reward", "hope miner", hopeMiner, "error", err)

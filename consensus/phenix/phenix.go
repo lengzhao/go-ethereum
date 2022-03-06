@@ -892,6 +892,7 @@ func (c *Phenix) checkLeftChildShard(chain consensus.ChainHeaderReader, header *
 	var head *types.Header
 	err = client.CallContext(ctx, &head, "proxy_headerByHash", big.NewInt(int64(c.config.ShardID)*2), cs)
 	if err != nil {
+		c.startShardThread(chain, header, state, big.NewInt(int64(c.config.ShardID)*2))
 		return err
 	}
 	if head == nil {
@@ -965,14 +966,15 @@ func (c *Phenix) checkRightChildShard(chain consensus.ChainHeaderReader, header 
 		if t.Uint64() == 0 {
 			return nil
 		}
+
 		if t.Uint64()+firstBlockInterval+shardInterval <= header.Time {
 			return errors.New("require right child shard")
 		}
-		if t.Uint64()+firstBlockInterval/2 < header.Time {
+		if t.Uint64()+firstBlockInterval > header.Time {
 			return nil
 		}
 		// start the shard thread
-		if header.Number.Uint64()%100 == 0 {
+		if header.Number.Uint64()%10 == 0 {
 			c.startShardThread(chain, header, state, big.NewInt(int64(c.config.ShardID)*2+1))
 		}
 		return nil
@@ -987,6 +989,7 @@ func (c *Phenix) checkRightChildShard(chain consensus.ChainHeaderReader, header 
 	var head *types.Header
 	err = client.CallContext(ctx, &head, "proxy_headerByHash", big.NewInt(int64(c.config.ShardID)*2+1), cs)
 	if err != nil {
+		c.startShardThread(chain, header, state, big.NewInt(int64(c.config.ShardID)*2+1))
 		return err
 	}
 	if head == nil {

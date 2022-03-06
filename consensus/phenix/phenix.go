@@ -719,7 +719,7 @@ func (c *Phenix) getChildShardHashWithTime(chain consensus.ChainHeaderReader, he
 	shardID *big.Int) (common.Hash, error) {
 	var out common.Hash
 
-	input, err := abi.GetABI(abi.EShard).Pack("shards", big.NewInt(int64(c.config.ShardID)*2+1))
+	input, err := abi.GetABI(abi.EShard).Pack("shards", shardID)
 	if err != nil {
 		log.Error("Can't pack data for miners", "error", err)
 		return out, err
@@ -738,10 +738,13 @@ func (c *Phenix) getChildShardHashWithTime(chain consensus.ChainHeaderReader, he
 	if err != nil {
 		return out, err
 	}
-	if st.Uint64() == 0 {
+	t1 := st.Uint64()
+	if t1 == 0 {
+		// log.Error("error shard time", "shard id", shardID)
 		return out, nil
 	}
-	if st.Uint64()+shardInterval > header.Time {
+	t1 += firstBlockInterval + shardInterval
+	if t1 > header.Time {
 		return out, nil
 	}
 
@@ -753,9 +756,8 @@ func (c *Phenix) getChildShardHashWithTime(chain consensus.ChainHeaderReader, he
 	defer client.Close()
 
 	var head *types.Header
-	number := (header.Time - shardInterval - st.Uint64()) / c.config.Period
-	err = client.CallContext(ctx, &head, "proxy_headerByNumber", new(big.Int).SetUint64(c.config.ShardID*2+1),
-		new(big.Int).SetUint64(number))
+	number := (header.Time - t1) / c.config.Period
+	err = client.CallContext(ctx, &head, "proxy_headerByNumber", shardID, new(big.Int).SetUint64(number))
 	if err != nil || head == nil {
 		return out, errors.New("fail to get right child block")
 	}
@@ -903,6 +905,7 @@ func (c *Phenix) checkLeftChildShard(chain consensus.ChainHeaderReader, header *
 	if cp == nil {
 		return fmt.Errorf("not found the parent of left child shard")
 	}
+
 	parent := chain.GetHeaderByHash(header.ParentHash)
 	if parent == nil {
 		return fmt.Errorf("not found parent")
@@ -929,8 +932,10 @@ func (c *Phenix) checkLeftChildShard(chain consensus.ChainHeaderReader, header *
 		}
 		return nil
 	}
-	if cp.ParentHash != prInfo.Parent {
-		return fmt.Errorf("error parent of left child shard")
+	if head.Number.Uint64() > 1 && head.ParentHash != prInfo.LeftChild {
+		log.Error("error parent of left child shard", "child number", head.Number, "child time", head.Time,
+			"cp.ParentHash", cp.ParentHash, "prInfo.LeftChild", prInfo.LeftChild)
+		return fmt.Errorf("error ParentHash of left child shard")
 	}
 
 	return nil
@@ -1021,8 +1026,8 @@ func (c *Phenix) checkRightChildShard(chain consensus.ChainHeaderReader, header 
 		}
 		return nil
 	}
-	if cp.ParentHash != prInfo.Parent {
-		return fmt.Errorf("error parent of right child shard")
+	if head.Number.Uint64() > 1 && head.ParentHash != prInfo.RightChild {
+		return fmt.Errorf("error ParentHash of right child shard")
 	}
 
 	return nil

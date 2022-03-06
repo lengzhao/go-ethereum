@@ -491,6 +491,7 @@ func (s *Ethereum) StartMining(threads int) error {
 
 		go func() {
 			time.Sleep(20 * time.Second)
+			log.Info("start mining")
 			s.miner.Start(eb)
 		}()
 	}

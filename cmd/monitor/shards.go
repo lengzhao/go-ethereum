@@ -50,7 +50,7 @@ func NewShardManager(c Config) *ShardManager {
 	for k, v := range c.CommandParams {
 		out.param[k] = v
 	}
-	go out.startShard(1)
+	go out.startAllShard(1)
 
 	return &out
 }
@@ -71,6 +71,18 @@ func initShard(id uint64, fn string) error {
 	}
 	log.Info("init shard", "id", id, "dir", dirName, "genesis file", fn)
 	return nil
+}
+
+func (s *ShardManager) startAllShard(id uint64) {
+	dirName := getShardDir(id)
+	dirName = path.Join(dirName, "geth")
+	_, err := os.Stat(dirName)
+	if os.IsNotExist(err) {
+		return
+	}
+	go s.startShard(id)
+	s.startAllShard(2 * id)
+	s.startAllShard(2*id + 1)
 }
 
 func (s *ShardManager) startShard(id uint64) error {

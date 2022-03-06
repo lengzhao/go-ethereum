@@ -67,7 +67,7 @@ var (
 	difficultyMin = big.NewInt(200000)
 
 	firstBlockInterval uint64 = 24 * 3600
-	shardInterval      uint64 = 5 * 30
+	shardInterval      uint64 = 4 * 60
 
 	// emptySigner = common.HexToAddress("0x01")
 	emptySigner  = abi.ReservedAddr
@@ -190,6 +190,9 @@ func New(config *params.ChainConfig, db ethdb.Database) *Phenix {
 	ipcAddr := "./phenix_proxy.ipc"
 	if runtime.GOOS == "windows" {
 		ipcAddr = `\\.\pipe\phenix_proxy.ipc`
+	}
+	if shardInterval%conf.Period != 0 {
+		log.Crit("error Period of config", "shardInterval", shardInterval, "Period", conf.Period)
 	}
 	return &Phenix{
 		chainCfg:      *config,
@@ -669,12 +672,17 @@ func (c *Phenix) setExtra(chain consensus.ChainHeaderReader, header *types.Heade
 		var head *types.Header
 		err = client.CallContext(ctx, &head, "proxy_headerByNumber", new(big.Int).SetUint64(c.config.ShardID/2), nil)
 		if err != nil || head == nil {
-			return errors.New("fail to get parent block")
+			return errors.New("fail to get block of parent shard")
 		}
-		number := head.Number.Uint64() - (header.Time+shardInterval-head.Time)/c.config.Period
+		hopeTime := header.Time - shardInterval
+		if head.Time < hopeTime {
+			log.Warn("the block of parent shard is too old", "hope time", hopeTime, "get", head.Time)
+			return errors.New("the block of parent shard is too old")
+		}
+		number := head.Number.Uint64() - (head.Time-hopeTime)/c.config.Period
 		err = client.CallContext(ctx, &head, "proxy_headerByNumber", new(big.Int).SetUint64(c.config.ShardID/2), new(big.Int).SetUint64(number))
 		if err != nil || head == nil {
-			return errors.New("fail to get parent block")
+			return errors.New("fail to get block of parent shard")
 		}
 		info.Parent = head.Hash()
 	}
@@ -790,12 +798,14 @@ func (c *Phenix) checkParentShard(chain consensus.ChainHeaderReader, header *typ
 
 	if number == 0 {
 		if header.Time != head.Time+firstBlockInterval {
+			log.Error("error block time of parent shard", "number", 0, "hope", head.Time+firstBlockInterval, "get", header.Time)
 			return fmt.Errorf("error parent time")
 		}
 		return nil
 	}
 	if number == 1 {
 		if header.Time != head.Time+shardInterval {
+			log.Error("error block time of parent shard", "number", 1, "hope", head.Time+shardInterval, "get", header.Time)
 			return fmt.Errorf("error parent time")
 		}
 		return nil
@@ -861,11 +871,11 @@ func (c *Phenix) checkLeftChildShard(chain consensus.ChainHeaderReader, header *
 		if t.Uint64()+firstBlockInterval+shardInterval <= header.Time {
 			return errors.New("require left child shard")
 		}
-		if t.Uint64()+firstBlockInterval/2 < header.Time {
+		if t.Uint64()+firstBlockInterval > header.Time {
 			return nil
 		}
 		// start the shard thread
-		if header.Number.Uint64()%100 == 0 {
+		if header.Number.Uint64()%10 == 0 {
 			c.startShardThread(chain, header, state, big.NewInt(int64(c.config.ShardID)*2))
 		}
 		return nil
@@ -1031,6 +1041,7 @@ func (c *Phenix) startShardThread(chain consensus.ChainHeaderReader, header *typ
 		// started
 		return nil
 	}
+	log.Info("startShardThread", "shardID", shardID)
 	// params: shardID, chainID, reward, timestamp *big.Int, hash common.Hash
 	var (
 		timestamp *big.Int
@@ -1049,6 +1060,7 @@ func (c *Phenix) startShardThread(chain consensus.ChainHeaderReader, header *typ
 			return err
 		}
 		if len(result) == 0 {
+			log.Info("startShardThread1", "read shards", shardID)
 			return nil
 		}
 
@@ -1070,6 +1082,7 @@ func (c *Phenix) startShardThread(chain consensus.ChainHeaderReader, header *typ
 			return err
 		}
 		if len(result) == 0 {
+			log.Info("startShardThread1", "read chainOfShard", shardID)
 			return nil
 		}
 
@@ -1090,6 +1103,8 @@ func (c *Phenix) startShardThread(chain consensus.ChainHeaderReader, header *typ
 	reward = reward.Mul(reward, rewardBase)
 	reward = reward.Mul(reward, big.NewInt(4))
 	reward = reward.Div(reward, big.NewInt(5))
+
+	log.Info("startShardThread3", "shardID", shardID, "chainID", chainID, "reward", reward, "timestamp", timestamp, "hash", hash)
 
 	err = client.CallContext(ctx, &head, "shards_newShard", shardID, chainID, reward, timestamp, hash)
 	if err != nil {

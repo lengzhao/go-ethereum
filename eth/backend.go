@@ -489,7 +489,10 @@ func (s *Ethereum) StartMining(threads int) error {
 		// introduced to speed sync times.
 		atomic.StoreUint32(&s.handler.acceptTxs, 1)
 
-		go s.miner.Start(eb)
+		go func() {
+			time.Sleep(20 * time.Second)
+			s.miner.Start(eb)
+		}()
 	}
 	return nil
 }

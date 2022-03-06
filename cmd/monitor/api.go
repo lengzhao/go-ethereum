@@ -86,7 +86,7 @@ func (api *API) StorageAt(ctx context.Context, shardID *big.Int, account common.
 	return out, nil
 }
 
-func (api *API) FilterLogs(ctx context.Context, shardID *big.Int, q ethereum.FilterQuery) ([]types.Log, error) {
+func (api *API) GetLogs(ctx context.Context, shardID *big.Int, q ethereum.FilterQuery) ([]types.Log, error) {
 	client, err := api.getClient(shardID)
 	if err != nil {
 		return nil, err

@@ -37,7 +37,7 @@ func main() {
 		verbosity = flag.Int("verbosity", int(log.LvlInfo), "log verbosity (0-5)")
 		vmodule   = flag.String("vmodule", "", "log verbosity pattern")
 		init      = flag.Bool("init", false, "init the first shard")
-		nodeKey   = flag.Bool("nodeKey", false, "gen nodekey(node.key)")
+		nodeKey   = flag.Bool("nodekey", false, "gen nodekey(node.key)")
 		cfg       = flag.Bool("conf", false, "dump config file")
 		err       error
 	)

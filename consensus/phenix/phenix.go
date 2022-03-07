@@ -76,7 +76,7 @@ var (
 
 	rewardBase = big.NewInt(1e+18)
 
-	logSigHash = crypto.Keccak256Hash([]byte("Transfer(uint256,uint256,address,bytes)"))
+	logSigHash = crypto.Keccak256Hash([]byte("CrossTo(uint256,uint256,address,bytes)"))
 )
 
 // Various error messages to mark blocks invalid. These should be private to

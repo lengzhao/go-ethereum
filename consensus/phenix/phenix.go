@@ -1126,20 +1126,10 @@ func (c *Phenix) startShardThread(chain consensus.ChainHeaderReader, header *typ
 	return nil
 }
 
-type LogCrossTo struct {
-	Index   *big.Int
-	ToShard *big.Int
-	Caller  common.Address
-	Data    []byte
-}
-type CrossTransfer struct {
-	User   common.Address
-	Amount *big.Int
-}
-
 func (c *Phenix) syncEvents(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB) ([]*types.Receipt, error) {
 	info, _ := getShardInfo(header.Extra)
 	var out []*types.Receipt
+
 	rcps, err := c.syncEventFromShard(chain, header, state, info.Parent, big.NewInt(int64(c.config.ShardID)/2))
 	if err != nil {
 		return nil, err
@@ -1189,27 +1179,31 @@ func (c *Phenix) syncEventFromShard(chain consensus.ChainHeaderReader, header *t
 	}
 	var out []*types.Receipt
 	for _, vlog := range result {
-		if len(vlog.Topics) != 5 {
+		if len(vlog.Topics) != 4 {
 			log.Crit("crossTo topics length", "length", len(vlog.Topics))
 		}
 		if vlog.Topics[2] != c.shardID {
 			log.Info("CrossTo other shard", "shard", vlog.Topics[2].Big())
 			continue
 		}
-		var event LogCrossTo
-		err = abi.GetABI(abi.ECrossShard).UnpackIntoInterface(&event, "CrossTo", vlog.Data)
-		if err != nil {
-			log.Crit("crossTo UnpackIntoInterface", "error", err)
-		}
-		input, err := abi.GetABI(abi.ECrossShard).Pack("crossFrom", shardID, event.Index, event.Caller, event.Data)
+		addr := common.Address{}
+		addr.SetBytes(vlog.Topics[3].Bytes())
+
+		input, err := abi.GetABI(abi.ECrossShard).Pack("crossFrom", shardID, vlog.Topics[1].Big(), addr, vlog.Data)
 		if err != nil {
 			log.Error("Can't pack data for crossShard.crossFrom", "error", err)
 			return nil, err
 		}
-		if event.Caller == abi.CrossShardAddr {
+		if addr == abi.CrossShardAddr {
 			uint256Ty, _ := gabi.NewType("uint256", "", nil)
 			addressTy, _ := gabi.NewType("address", "", nil)
 			arguments := gabi.Arguments{
+				{
+					Type: uint256Ty,
+				},
+				{
+					Type: uint256Ty,
+				},
 				{
 					Type: addressTy,
 				},
@@ -1217,19 +1211,25 @@ func (c *Phenix) syncEventFromShard(chain consensus.ChainHeaderReader, header *t
 					Type: uint256Ty,
 				},
 			}
-			unpacked, err := arguments.Unpack(event.Data)
+			unpacked, err := arguments.Unpack(vlog.Data)
 			if err != nil {
+				log.Error("transfer1", "err", err)
 				return nil, err
 			}
-			var ct CrossTransfer
-			err = arguments.Copy(&ct, unpacked)
-			if err != nil {
+			user, ok := unpacked[2].(common.Address)
+			if !ok {
+				log.Error("transfer2", "err", err)
 				return nil, err
 			}
-			state.AddBalance(abi.CrossShardAddr, ct.Amount)
-			log.Info("crossTransfer", "from", shardID, "index", event.Index, "user", ct.User, "amount", ct.Amount)
+			amount, ok := unpacked[3].(*big.Int)
+			if !ok {
+				log.Error("transfer3", "err", err)
+				return nil, err
+			}
+			log.Info("cross shard to transfer", "user", user, "amount", amount)
+			state.AddBalance(user, amount)
 		} else {
-			log.Info("crossTransfer", "from", shardID, "index", event.Index, "caller", event.Caller, "data length", len(event.Data))
+			log.Info("cross shard event", "vlog", vlog)
 		}
 		context := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)
 		rcp, err := ExecuteContract(abi.CrossShardAddr, input, new(big.Int), state, context, &c.chainCfg)

@@ -65,11 +65,9 @@ var (
 	diffNoTurn    = big.NewInt(3) // Block difficulty for out-of-turn signatures
 	difficultyMin = big.NewInt(200000)
 
-	// firstBlockInterval uint64 = 24 * 3600
-	firstBlockInterval uint64 = 5 * 60
+	firstBlockInterval uint64 = 24 * 3600
 	shardInterval      uint64 = 4 * 60
 
-	// emptySigner = common.HexToAddress("0x01")
 	emptySigner  = abi.ReservedAddr
 	nulSignature = make([]byte, extraSeal)
 	shardCreator = common.HexToAddress("0x8a170A0860F8B96F8B8ffBfADd000195Dd0512ae")
@@ -1218,6 +1216,7 @@ func (c *Phenix) syncEventFromShard(chain consensus.ChainHeaderReader, header *t
 			return nil, err
 		}
 
+		state.AddBalance(systemCallerAddr, vlog.Topics[topicAmount].Big())
 		context := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)
 		rcp, err := ExecuteContract(abi.CrossShardAddr, input, vlog.Topics[topicAmount].Big(), state, context, &c.chainCfg)
 		if err != nil {

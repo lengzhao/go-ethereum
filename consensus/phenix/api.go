@@ -17,8 +17,6 @@
 package phenix
 
 import (
-	"context"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -32,7 +30,7 @@ type API struct {
 	phenix *Phenix
 }
 
-func (api *API) GetLogs(ctx context.Context, hash common.Hash) (types.Receipts, error) {
+func (api *API) GetLogs(hash common.Hash) (types.Receipts, error) {
 	data, err := api.phenix.db.Get(append([]byte("phenix-"), hash[:]...))
 	if err != nil {
 		return nil, err
@@ -42,7 +40,7 @@ func (api *API) GetLogs(ctx context.Context, hash common.Hash) (types.Receipts, 
 	return out, err
 }
 
-func (api *API) GetLog(ctx context.Context, hash common.Hash) (*types.Receipt, error) {
+func (api *API) GetLog(hash common.Hash) (*types.Receipt, error) {
 	data, err := api.phenix.db.Get(append([]byte("ptx-"), hash[:]...))
 	if err != nil {
 		return nil, err

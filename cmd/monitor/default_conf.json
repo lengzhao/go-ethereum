@@ -11,6 +11,10 @@
         {
             "enode": "enode://6b6b30b7c9741ee16a9bf99f5efc08cff3f8983bf1d9dd73d7068ff3f9b4fbaf9d05a303fc028cde3c599ff14feacaabb923122f7300c4a74d295ead2b74f713@govm.net:%d",
             "start_port": 30301
+        },
+        {
+            "enode": "enode://ea012b3fce6eada9e9a191e53bd0029bc4e9a086821e8d3ef3a88efed2b10b39cca023a2f46333fa8c78acb13264a537f7e31092441754059fb3fb4758c43397@8.214.104.200:%d",
+            "start_port": 30301
         }
     ],
     "command_params": {

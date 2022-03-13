@@ -21,6 +21,7 @@ var Modules = map[string]string{
 	"admin":    AdminJs,
 	"clique":   CliqueJs,
 	"ethash":   EthashJs,
+	"phenix":   PhenixJs,
 	"debug":    DebugJs,
 	"eth":      EthJs,
 	"miner":    MinerJs,
@@ -84,6 +85,24 @@ web3._extend({
 		new web3._extend.Property({
 			name: 'proposals',
 			getter: 'clique_proposals'
+		}),
+	]
+});
+`
+
+const PhenixJs = `
+web3._extend({
+	property: 'phenix',
+	methods: [
+		new web3._extend.Method({
+			name: 'getLogs',
+			call: 'phenix_getLogs',
+			params: 1
+		}),
+		new web3._extend.Method({
+			name: 'getLog',
+			call: 'phenix_getLog',
+			params: 1
 		}),
 	]
 });

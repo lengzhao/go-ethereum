@@ -3,11 +3,13 @@ package phenix
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"math"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
+	"github.com/ethereum/go-ethereum/consensus/phenix/abi"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -82,6 +84,13 @@ func ExecuteContract(contract common.Address, input []byte, amount *big.Int, sta
 	receipt.BlockNumber = context.BlockNumber
 	receipt.TransactionIndex = uint(ti)
 	receipt.ContractAddress = *msg.To()
+	if *msg.To() == abi.CrossShardAddr {
+		log.Info("ExecuteContract", "contract", msg.To(), "tx", ths.String(), "status", receipt.Status, "log number", len(receipt.Logs))
+		for i, it := range receipt.Logs {
+			log.Info("Contract log", "contract", msg.To(), "tx", ths.String(), "index", i,
+				"log.Address", it.Address, "log.Topecs", it.Topics, "log.Data", hex.EncodeToString(it.Data))
+		}
+	}
 
 	return receipt, nil
 }

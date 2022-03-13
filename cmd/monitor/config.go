@@ -37,7 +37,7 @@ func init() {
 	if runtime.GOOS == "windows" {
 		conf.AddressRoot = `\\.\pipe\` + "phenix%d.ipc"
 	} else {
-		conf.AddressRoot = "./shard%d/phenix%d.ipc"
+		conf.AddressRoot = "./shard%d/phenix0.ipc"
 	}
 }
 
@@ -70,13 +70,5 @@ func (c *Config) IPCEndpoint() string {
 }
 
 func (c *Config) GetAddress(shardID *big.Int) string {
-	count := strings.Count(c.AddressRoot, "%")
-	switch count {
-	case 1:
-		return fmt.Sprintf(c.AddressRoot, shardID.Uint64())
-	case 2:
-		return fmt.Sprintf(c.AddressRoot, shardID.Uint64(), shardID.Uint64())
-	default:
-		return c.AddressRoot
-	}
+	return fmt.Sprintf(c.AddressRoot, shardID.Uint64())
 }

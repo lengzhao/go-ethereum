@@ -55,12 +55,6 @@
             {
                 "indexed": true,
                 "internalType": "uint256",
-                "name": "index",
-                "type": "uint256"
-            },
-            {
-                "indexed": true,
-                "internalType": "uint256",
                 "name": "toShard",
                 "type": "uint256"
             },
@@ -71,10 +65,16 @@
                 "type": "address"
             },
             {
+                "indexed": true,
+                "internalType": "uint256",
+                "name": "amount",
+                "type": "uint256"
+            },
+            {
                 "indexed": false,
-                "internalType": "bytes",
-                "name": "data",
-                "type": "bytes"
+                "internalType": "uint256",
+                "name": "index",
+                "type": "uint256"
             }
         ],
         "name": "CrossTo",
@@ -283,7 +283,7 @@
                 "type": "uint256"
             }
         ],
-        "stateMutability": "nonpayable",
+        "stateMutability": "payable",
         "type": "function"
     },
     {
@@ -294,14 +294,14 @@
                 "type": "uint256"
             },
             {
-                "internalType": "uint256",
-                "name": "index",
-                "type": "uint256"
-            },
-            {
                 "internalType": "address",
                 "name": "app",
                 "type": "address"
+            },
+            {
+                "internalType": "uint256",
+                "name": "index",
+                "type": "uint256"
             },
             {
                 "internalType": "bytes",
@@ -311,7 +311,7 @@
         ],
         "name": "crossFrom",
         "outputs": [],
-        "stateMutability": "nonpayable",
+        "stateMutability": "payable",
         "type": "function"
     },
     {
@@ -358,7 +358,36 @@
         ],
         "name": "crossShardCallback",
         "outputs": [],
-        "stateMutability": "nonpayable",
+        "stateMutability": "payable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "uint256",
+                "name": "from",
+                "type": "uint256"
+            },
+            {
+                "internalType": "uint256",
+                "name": "toShard",
+                "type": "uint256"
+            },
+            {
+                "internalType": "uint256",
+                "name": "cid",
+                "type": "uint256"
+            }
+        ],
+        "name": "computeHash",
+        "outputs": [
+            {
+                "internalType": "bytes32",
+                "name": "",
+                "type": "bytes32"
+            }
+        ],
+        "stateMutability": "pure",
         "type": "function"
     }
 ]

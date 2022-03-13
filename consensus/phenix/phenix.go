@@ -30,7 +30,6 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/accounts"
-	gabi "github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/misc"
@@ -66,7 +65,8 @@ var (
 	diffNoTurn    = big.NewInt(3) // Block difficulty for out-of-turn signatures
 	difficultyMin = big.NewInt(200000)
 
-	firstBlockInterval uint64 = 24 * 3600
+	// firstBlockInterval uint64 = 24 * 3600
+	firstBlockInterval uint64 = 5 * 60
 	shardInterval      uint64 = 4 * 60
 
 	// emptySigner = common.HexToAddress("0x01")
@@ -642,13 +642,13 @@ func (c *Phenix) checkExtra(chain consensus.ChainHeaderReader, header *types.Hea
 
 	err = c.checkLeftChildShard(chain, header, state, info.LeftChild)
 	if err != nil {
-		log.Warn("checkLeftChildShard", "error", err)
+		log.Warn("checkLeftChildShard", "left child", info.LeftChild, "error", err)
 		return err
 	}
 
 	err = c.checkRightChildShard(chain, header, state, info.RightChild)
 	if err != nil {
-		log.Warn("checkRightChildShard", "error", err)
+		log.Warn("checkRightChildShard", "right child", info.RightChild, "error", err)
 		return err
 	}
 
@@ -759,7 +759,8 @@ func (c *Phenix) getChildShardHashWithTime(chain consensus.ChainHeaderReader, he
 	number := (header.Time - t1) / c.config.Period
 	err = client.CallContext(ctx, &head, "proxy_headerByNumber", shardID, new(big.Int).SetUint64(number))
 	if err != nil || head == nil {
-		return out, errors.New("fail to get right child block")
+		log.Error("getChildShardHashWithTime proxy_headerByNumber", "shardID", shardID, "number", number)
+		return out, errors.New("fail to get child block")
 	}
 	out = head.Hash()
 	return out, nil
@@ -873,7 +874,7 @@ func (c *Phenix) checkLeftChildShard(chain consensus.ChainHeaderReader, header *
 		if t.Uint64()+firstBlockInterval+shardInterval <= header.Time {
 			return errors.New("require left child shard")
 		}
-		if t.Uint64()+firstBlockInterval > header.Time {
+		if t.Uint64()+firstBlockInterval-shardInterval/2 > header.Time {
 			return nil
 		}
 		// start the shard thread
@@ -970,7 +971,7 @@ func (c *Phenix) checkRightChildShard(chain consensus.ChainHeaderReader, header 
 		if t.Uint64()+firstBlockInterval+shardInterval <= header.Time {
 			return errors.New("require right child shard")
 		}
-		if t.Uint64()+firstBlockInterval > header.Time {
+		if t.Uint64()+firstBlockInterval-shardInterval/2 > header.Time {
 			return nil
 		}
 		// start the shard thread
@@ -1154,7 +1155,19 @@ func (c *Phenix) syncEvents(chain consensus.ChainHeaderReader, header *types.Hea
 	return out, nil
 }
 
-func (c *Phenix) syncEventFromShard(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, cs common.Hash, shardID *big.Int) ([]*types.Receipt, error) {
+const (
+	topicShardID = iota + 1
+	topicCaller
+	topicAmount
+)
+
+type syncOtherInfo struct {
+	Index *big.Int
+	Data  []byte
+}
+
+func (c *Phenix) syncEventFromShard(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB,
+	cs common.Hash, shardID *big.Int) ([]*types.Receipt, error) {
 	if cs == (common.Hash{}) {
 		return nil, nil
 	}
@@ -1177,62 +1190,36 @@ func (c *Phenix) syncEventFromShard(chain consensus.ChainHeaderReader, header *t
 		log.Warn("fail to proxy_getLogs", "error", err)
 		return nil, err
 	}
+	if len(result) == 0 {
+		return nil, nil
+	}
+	log.Info("syncEventFromShard", "block hash", cs, "shardID", shardID, "len", len(result))
 	var out []*types.Receipt
 	for _, vlog := range result {
 		if len(vlog.Topics) != 4 {
 			log.Crit("crossTo topics length", "length", len(vlog.Topics))
 		}
-		if vlog.Topics[2] != c.shardID {
+		if vlog.Topics[topicShardID] != c.shardID {
 			log.Info("CrossTo other shard", "shard", vlog.Topics[2].Big())
 			continue
 		}
 		addr := common.Address{}
-		addr.SetBytes(vlog.Topics[3].Bytes())
+		addr.SetBytes(vlog.Topics[topicCaller].Bytes())
+		var info syncOtherInfo
+		err := abi.GetABI(abi.ECrossShard).UnpackIntoInterface(&info, "CrossTo", vlog.Data)
+		if err != nil {
+			log.Error("Can't unpack data for crossShard.CrossTo", "error", err)
+			return nil, err
+		}
 
-		input, err := abi.GetABI(abi.ECrossShard).Pack("crossFrom", shardID, vlog.Topics[1].Big(), addr, vlog.Data)
+		input, err := abi.GetABI(abi.ECrossShard).Pack("crossFrom", shardID, addr, info.Index, info.Data)
 		if err != nil {
 			log.Error("Can't pack data for crossShard.crossFrom", "error", err)
 			return nil, err
 		}
-		if addr == abi.CrossShardAddr {
-			uint256Ty, _ := gabi.NewType("uint256", "", nil)
-			addressTy, _ := gabi.NewType("address", "", nil)
-			arguments := gabi.Arguments{
-				{
-					Type: uint256Ty,
-				},
-				{
-					Type: uint256Ty,
-				},
-				{
-					Type: addressTy,
-				},
-				{
-					Type: uint256Ty,
-				},
-			}
-			unpacked, err := arguments.Unpack(vlog.Data)
-			if err != nil {
-				log.Error("transfer1", "err", err)
-				return nil, err
-			}
-			user, ok := unpacked[2].(common.Address)
-			if !ok {
-				log.Error("transfer2", "err", err)
-				return nil, err
-			}
-			amount, ok := unpacked[3].(*big.Int)
-			if !ok {
-				log.Error("transfer3", "err", err)
-				return nil, err
-			}
-			log.Info("cross shard to transfer", "user", user, "amount", amount)
-			state.AddBalance(user, amount)
-		} else {
-			log.Info("cross shard event", "vlog", vlog)
-		}
+
 		context := core.NewEVMBlockContext(header, newChainContext(chain, c), nil)
-		rcp, err := ExecuteContract(abi.CrossShardAddr, input, new(big.Int), state, context, &c.chainCfg)
+		rcp, err := ExecuteContract(abi.CrossShardAddr, input, vlog.Topics[topicAmount].Big(), state, context, &c.chainCfg)
 		if err != nil {
 			log.Error("fail to ExecuteContract:crossFrom", err)
 			return nil, err
@@ -1281,6 +1268,9 @@ func (c *Phenix) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 
 	// Sweet, the protocol permits us to sign the block, wait for our time
 	delay := time.Until(time.Unix(int64(header.Time), 0))
+	if delay < 100*time.Millisecond {
+		delay = 100 * time.Millisecond
+	}
 
 	if header.Coinbase == emptySigner {
 		copy(header.Extra[len(header.Extra)-extraSeal:], make([]byte, extraSeal))

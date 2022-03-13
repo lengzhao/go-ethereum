@@ -37,7 +37,7 @@ func init() {
 	if runtime.GOOS == "windows" {
 		conf.AddressRoot = `\\.\pipe\` + "phenix%d.ipc"
 	} else {
-		conf.AddressRoot = "./shard%d/phenix0.ipc"
+		conf.AddressRoot = "./shard%d/phenix%d.ipc"
 	}
 }
 

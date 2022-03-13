@@ -70,5 +70,13 @@ func (c *Config) IPCEndpoint() string {
 }
 
 func (c *Config) GetAddress(shardID *big.Int) string {
-	return fmt.Sprintf(c.AddressRoot, shardID.Uint64())
+	count := strings.Count(c.AddressRoot, "%")
+	switch count {
+	case 1:
+		return fmt.Sprintf(c.AddressRoot, shardID.Uint64())
+	case 2:
+		return fmt.Sprintf(c.AddressRoot, shardID.Uint64(), shardID.Uint64())
+	default:
+		return c.AddressRoot
+	}
 }

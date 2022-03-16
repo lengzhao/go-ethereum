@@ -8,18 +8,24 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/rpc"
 )
 
 // API proxy to other shards
 type API struct {
-	conf    Config
-	clients map[uint64]*ethclient.Client
+	conf           Config
+	clients        map[uint64]*ethclient.Client
+	useTrustedNode bool
 }
 
-func NewAPI(c Config) *API {
+func NewAPI(c Config, useTrustedNode bool) *API {
 	var out API
 	out.conf = c
 	out.clients = make(map[uint64]*ethclient.Client)
+	out.useTrustedNode = useTrustedNode
+	if c.TrustedNode == "" {
+		out.useTrustedNode = false
+	}
 	return &out
 }
 
@@ -52,7 +58,21 @@ func (api *API) HeaderByHash(ctx context.Context, shardID *big.Int, hash common.
 	if err != nil {
 		client.Close()
 		delete(api.clients, shardID.Uint64())
-		return nil, err
+		if !api.useTrustedNode {
+			return nil, err
+		}
+		c, e := rpc.DialContext(ctx, api.conf.TrustedNode)
+		if e != nil {
+			return nil, err
+		}
+		defer c.Close()
+		var head *types.Header
+		e = c.CallContext(ctx, &head, "proxy_headerByHash", shardID, hash)
+		if e != nil {
+			return nil, err
+		}
+
+		return head, nil
 	}
 	return out, nil
 }
@@ -67,7 +87,21 @@ func (api *API) HeaderByNumber(ctx context.Context, shardID *big.Int, number *bi
 	if err != nil {
 		client.Close()
 		delete(api.clients, shardID.Uint64())
-		return nil, err
+		if !api.useTrustedNode {
+			return nil, err
+		}
+		c, e := rpc.DialContext(ctx, api.conf.TrustedNode)
+		if e != nil {
+			return nil, err
+		}
+		defer c.Close()
+		var head *types.Header
+		e = c.CallContext(ctx, &head, "proxy_headerByNumber", shardID, number)
+		if e != nil {
+			return nil, err
+		}
+
+		return head, nil
 	}
 	return out, nil
 }
@@ -95,7 +129,21 @@ func (api *API) GetLogs(ctx context.Context, shardID *big.Int, q ethereum.Filter
 	if err != nil {
 		client.Close()
 		delete(api.clients, shardID.Uint64())
-		return nil, err
+		if !api.useTrustedNode {
+			return nil, err
+		}
+		c, e := rpc.DialContext(ctx, api.conf.TrustedNode)
+		if e != nil {
+			return nil, err
+		}
+		defer c.Close()
+		var result []types.Log
+		e = c.CallContext(ctx, &result, "proxy_getLogs", shardID, q)
+		if e != nil {
+			return nil, err
+		}
+
+		return result, nil
 	}
 	return out, nil
 }

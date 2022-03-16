@@ -21,11 +21,13 @@ import (
 	_ "embed"
 	"flag"
 	"io/ioutil"
+	"net/http"
 	"os"
 
 	"github.com/ethereum/go-ethereum/cmd/utils"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
@@ -90,7 +92,7 @@ func main() {
 	listener, _, err := rpc.StartIPCEndpoint(conf.IPCEndpoint(), []rpc.API{{
 		Namespace: "proxy",
 		Version:   "1.0",
-		Service:   NewAPI(conf),
+		Service:   NewAPI(conf, true),
 		Public:    false,
 	}, {
 		Namespace: "shards",
@@ -106,6 +108,23 @@ func main() {
 		listener.Close()
 		log.Info("IPC endpoint closed", "url")
 	}()
+
+	if conf.WSAddress != "" {
+		srv := rpc.NewServer()
+		err = node.RegisterApis([]rpc.API{{
+			Namespace: "proxy",
+			Version:   "1.0",
+			Service:   NewAPI(conf, false),
+			Public:    false,
+		}}, []string{"proxy"}, srv, false)
+		if err != nil {
+			utils.Fatalf("fail to register websocket: %v", err)
+		}
+		err = http.ListenAndServe(conf.WSAddress, srv.WebsocketHandler(conf.WSOrigins))
+		if err != nil {
+			utils.Fatalf("fail to start websocket: %v", err)
+		}
+	}
 
 	select {}
 }

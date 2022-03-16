@@ -25,6 +25,9 @@ type Config struct {
 	CommandParams    map[string]string `json:"command_params,omitempty"`
 	ShardRestartTime int64             `json:"shard_restart_time,omitempty"`
 	Bootnodes        []BootNode        `json:"bootnodes,omitempty"`
+	WSAddress        string            `json:"ws_address,omitempty"`
+	WSOrigins        []string          `json:"ws_origins,omitempty"`
+	TrustedNode      string            `json:"trusted_node,omitempty"`
 }
 
 var conf Config

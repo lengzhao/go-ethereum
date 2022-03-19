@@ -48,6 +48,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/gorilla/websocket"
+	"github.com/syndtr/goleveldb/leveldb"
 )
 
 var (
@@ -88,7 +89,7 @@ func main() {
 	for i := 0; i < *tiersFlag; i++ {
 		// Calculate the amount for the next tier and format it
 		amount := float64(*payoutFlag) * math.Pow(2.5, float64(i))
-		amounts[i] = fmt.Sprintf("%s Ethers", strconv.FormatFloat(amount, 'f', -1, 64))
+		amounts[i] = fmt.Sprintf("%s Phenix", strconv.FormatFloat(amount, 'f', -1, 64))
 		if amount == 1 {
 			amounts[i] = strings.TrimSuffix(amounts[i], "s")
 		}
@@ -172,12 +173,14 @@ type faucet struct {
 	nonce    uint64             // Current pending nonce of the faucet
 	price    *big.Int           // Current gas price to issue funds with
 
-	conns    []*wsConn            // Currently live websocket connections
-	timeouts map[string]time.Time // History of users and their funding timeouts
-	reqs     []*request           // Currently pending funding requests
-	update   chan struct{}        // Channel to signal request updates
+	conns []*wsConn // Currently live websocket connections
+	// timeouts map[string]time.Time // History of users and their funding timeouts
+	reqs   []*request    // Currently pending funding requests
+	update chan struct{} // Channel to signal request updates
 
-	lock sync.RWMutex // Lock protecting the faucet's internals
+	lock       sync.RWMutex // Lock protecting the faucet's internals
+	rpcAddress string
+	recordDB   *leveldb.DB
 }
 
 // wsConn wraps a websocket connection with a write mutex as the underlying
@@ -193,21 +196,27 @@ func newFaucet(rpcAddress string, chainID uint64, ks *keystore.KeyStore, index [
 	if err != nil {
 		return nil, err
 	}
+	recordDB, err := leveldb.OpenFile("./record.db", nil)
+	if err != nil {
+		return nil, err
+	}
 
 	return &faucet{
-		chainID:  chainID,
-		client:   client,
-		index:    index,
-		keystore: ks,
-		account:  ks.Accounts()[0],
-		timeouts: make(map[string]time.Time),
-		update:   make(chan struct{}, 1),
+		chainID:    chainID,
+		client:     client,
+		index:      index,
+		keystore:   ks,
+		account:    ks.Accounts()[0],
+		update:     make(chan struct{}, 1),
+		rpcAddress: rpcAddress,
+		recordDB:   recordDB,
 	}, nil
 }
 
 // close terminates the Ethereum connection and tears down the faucet.
 func (f *faucet) close() error {
 	f.client.Close()
+	f.recordDB.Close()
 	return nil
 }
 
@@ -335,12 +344,11 @@ func (f *faucet) apiHandler(w http.ResponseWriter, r *http.Request) {
 		// Ensure the user didn't request funds too recently
 		f.lock.Lock()
 		var (
-			fund    bool
-			timeout time.Time
-			id      string
+			fund bool
 		)
-		id = address.String()
-		if timeout = f.timeouts[id]; time.Now().After(timeout) {
+
+		val, _ := f.recordDB.Get(address.Bytes(), nil)
+		if len(val) == 0 {
 			// User wasn't funded recently, create the funding transaction
 			amount := new(big.Int).Mul(big.NewInt(int64(*payoutFlag)), ether)
 			amount = new(big.Int).Mul(amount, new(big.Int).Exp(big.NewInt(5), big.NewInt(int64(msg.Tier)), nil))
@@ -370,17 +378,15 @@ func (f *faucet) apiHandler(w http.ResponseWriter, r *http.Request) {
 				Time:    time.Now(),
 				Tx:      signed,
 			})
-			timeout := time.Duration(*minutesFlag*int(math.Pow(3, float64(msg.Tier)))) * time.Minute
-			grace := timeout / 288 // 24h timeout => 5m grace
 
-			f.timeouts[id] = time.Now().Add(timeout - grace)
+			f.recordDB.Put(address.Bytes(), []byte{1}, nil)
 			fund = true
 		}
 		f.lock.Unlock()
 
 		// Send an error if too frequent funding, othewise a success
 		if !fund {
-			if err = sendError(wsconn, fmt.Errorf("%s left until next allowance", common.PrettyDuration(time.Until(timeout)))); err != nil { // nolint: gosimple
+			if err = sendError(wsconn, errors.New("only once per address")); err != nil { // nolint: gosimple
 				log.Warn("Failed to send funding error to client", "err", err)
 				return
 			}
@@ -408,6 +414,12 @@ func (f *faucet) refresh(head *types.Header) error {
 	var err error
 	if head == nil {
 		if head, err = f.client.HeaderByNumber(ctx, nil); err != nil {
+			client, err1 := ethclient.Dial(f.rpcAddress)
+			if err1 != nil {
+				return err
+			}
+			f.client.Close()
+			f.client = client
 			return err
 		}
 	}
@@ -462,6 +474,7 @@ func (f *faucet) loop() {
 			}
 			if err := f.refresh(head); err != nil {
 				log.Warn("Failed to update faucet state", "block", head.Number, "hash", head.Hash(), "err", err)
+				time.Sleep(time.Second)
 				continue
 			}
 			// Faucet state retrieved, update locally and send to clients

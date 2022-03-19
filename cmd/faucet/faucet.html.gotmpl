@@ -51,10 +51,7 @@
 						<div class="input-group">
 							<input id="address" name="address" type="text" class="form-control" placeholder="your Ethereum address..."/>
 							<span class="input-group-btn">
-								<button class="btn btn-default dropdown-toggle" type="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">Give me Ether	<i class="fa fa-caret-down" aria-hidden="true"></i></button>
-				        <ul class="dropdown-menu dropdown-menu-right">{{range $idx, $amount := .Amounts}}
-				          <li><a style="text-align: center;" onclick="tier={{$idx}}; submit({{$idx}})">{{$amount}} / {{index $.Periods $idx}}</a></li>{{end}}
-				        </ul>
+								<button class="btn btn-default" type="button" onclick="tier=0; submit(0)">Give me 10 phenix</button>
 							</span>
 						</div>
 					</div>

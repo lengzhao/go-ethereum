@@ -23,6 +23,7 @@ package main
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -32,7 +33,6 @@ import (
 	"math"
 	"math/big"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -61,21 +61,21 @@ var (
 	accJSONFlag = flag.String("account.json", "", "Key json file to fund user requests with")
 	accPassFlag = flag.String("account.pass", "", "Decryption password to access faucet funds")
 
-	captchaToken  = flag.String("captcha.token", "", "Recaptcha site key to authenticate client side")
-	captchaSecret = flag.String("captcha.secret", "", "Recaptcha secret key to authenticate server side")
-
 	noauthFlag = flag.Bool("noauth", false, "Enables funding requests without authentication")
 	logFlag    = flag.Int("loglevel", 3, "Log level to use for Ethereum and the faucet")
 
-	twitterTokenFlag   = flag.String("twitter.token", "", "Bearer token to authenticate with the v2 Twitter API")
-	twitterTokenV1Flag = flag.String("twitter.token.v1", "", "Bearer token to authenticate with the v1.1 Twitter API")
-	rpcFlag            = flag.String("rpc", "", "the rpc address of node")
-	chainIDFlag        = flag.Uint64("chaindID", 1, "chain id")
+	etherscanTokenFlag = flag.String("etherscan.token", "", "Bearer token to authenticate with the etherscan API")
+
+	rpcFlag     = flag.String("rpc", "", "the rpc address of node")
+	chainIDFlag = flag.Uint64("chaindID", 1, "chain id")
 )
 
 var (
 	ether = new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
 )
+
+//go:embed faucet.html.gotmpl
+var tmpl string
 
 func main() {
 	// Parse the flags and set up the logger to print everything requested
@@ -109,16 +109,12 @@ func main() {
 		}
 	}
 	// Load up and render the faucet website
-	tmpl, err := Asset("faucet.html")
-	if err != nil {
-		log.Crit("Failed to load the faucet template", "err", err)
-	}
 	website := new(bytes.Buffer)
-	err = template.Must(template.New("").Parse(string(tmpl))).Execute(website, map[string]interface{}{
+	err := template.Must(template.New("").Parse(tmpl)).Execute(website, map[string]interface{}{
 		"Network":   *netnameFlag,
 		"Amounts":   amounts,
 		"Periods":   periods,
-		"Recaptcha": *captchaToken,
+		"Recaptcha": "",
 		"NoAuth":    *noauthFlag,
 	})
 	if err != nil {
@@ -305,20 +301,20 @@ func (f *faucet) apiHandler(w http.ResponseWriter, r *http.Request) {
 	for {
 		// Fetch the next funding request and validate against github
 		var msg struct {
-			URL     string `json:"url"`
+			Address string `json:"address"`
 			Tier    uint   `json:"tier"`
 			Captcha string `json:"captcha"`
 		}
 		if err = conn.ReadJSON(&msg); err != nil {
 			return
 		}
-		if !*noauthFlag && !strings.HasPrefix(msg.URL, "https://twitter.com/") && !strings.HasPrefix(msg.URL, "https://www.facebook.com/") {
-			if err = sendError(wsconn, errors.New("URL doesn't link to supported services")); err != nil {
-				log.Warn("Failed to send URL error to client", "err", err)
-				return
-			}
+		msg.Address = strings.TrimSpace(msg.Address)
+		address := common.HexToAddress(string(regexp.MustCompile("0x[0-9a-fA-F]{40}").FindString(msg.Address)))
+		if address == (common.Address{}) {
+			sendError(wsconn, errors.New("error address"))
 			continue
 		}
+
 		if msg.Tier >= uint(*tiersFlag) {
 			//lint:ignore ST1005 This error is to be displayed in the browser
 			if err = sendError(wsconn, errors.New("Invalid funding tier requested")); err != nil {
@@ -327,80 +323,23 @@ func (f *faucet) apiHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
-		log.Info("Faucet funds requested", "url", msg.URL, "tier", msg.Tier)
-
-		// If captcha verifications are enabled, make sure we're not dealing with a robot
-		if *captchaToken != "" {
-			form := url.Values{}
-			form.Add("secret", *captchaSecret)
-			form.Add("response", msg.Captcha)
-
-			res, err := http.PostForm("https://www.google.com/recaptcha/api/siteverify", form)
-			if err != nil {
-				if err = sendError(wsconn, err); err != nil {
-					log.Warn("Failed to send captcha post error to client", "err", err)
-					return
-				}
-				continue
-			}
-			var result struct {
-				Success bool            `json:"success"`
-				Errors  json.RawMessage `json:"error-codes"`
-			}
-			err = json.NewDecoder(res.Body).Decode(&result)
-			res.Body.Close()
-			if err != nil {
-				if err = sendError(wsconn, err); err != nil {
-					log.Warn("Failed to send captcha decode error to client", "err", err)
-					return
-				}
-				continue
-			}
-			if !result.Success {
-				log.Warn("Captcha verification failed", "err", string(result.Errors))
-				//lint:ignore ST1005 it's funny and the robot won't mind
-				if err = sendError(wsconn, errors.New("Beep-bop, you're a robot!")); err != nil {
-					log.Warn("Failed to send captcha failure to client", "err", err)
-					return
-				}
-				continue
-			}
-		}
-		// Retrieve the Ethereum address to fund, the requesting user and a profile picture
-		var (
-			id       string
-			username string
-			avatar   string
-			address  common.Address
-		)
-		switch {
-		case strings.HasPrefix(msg.URL, "https://twitter.com/"):
-			id, username, avatar, address, err = authTwitter(msg.URL, *twitterTokenV1Flag, *twitterTokenFlag)
-		case strings.HasPrefix(msg.URL, "https://www.facebook.com/"):
-			username, avatar, address, err = authFacebook(msg.URL)
-			id = username
-		case *noauthFlag:
-			username, avatar, address, err = authNoAuth(msg.URL)
-			id = username
-		default:
-			//lint:ignore ST1005 This error is to be displayed in the browser
-			err = errors.New("Something funky happened, please open an issue at https://github.com/ethereum/go-ethereum/issues")
-		}
-		if err != nil {
-			if err = sendError(wsconn, err); err != nil {
-				log.Warn("Failed to send prefix error to client", "err", err)
+		if err1 := authEtherscan(*etherscanTokenFlag, address.Hex()); err1 != nil {
+			if err = sendError(wsconn, err1); err != nil {
+				log.Warn("Failed to send error(check balance) to client", "err", err)
 				return
 			}
 			continue
 		}
-		log.Info("Faucet request valid", "url", msg.URL, "tier", msg.Tier, "user", username, "address", address)
+		log.Info("Faucet funds requested", "address", msg.Address, "tier", msg.Tier)
 
 		// Ensure the user didn't request funds too recently
 		f.lock.Lock()
 		var (
 			fund    bool
 			timeout time.Time
+			id      string
 		)
+		id = address.String()
 		if timeout = f.timeouts[id]; time.Now().After(timeout) {
 			// User wasn't funded recently, create the funding transaction
 			amount := new(big.Int).Mul(big.NewInt(int64(*payoutFlag)), ether)
@@ -427,7 +366,6 @@ func (f *faucet) apiHandler(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			f.reqs = append(f.reqs, &request{
-				Avatar:  avatar,
 				Account: address,
 				Time:    time.Now(),
 				Tx:      signed,
@@ -448,7 +386,7 @@ func (f *faucet) apiHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
-		if err = sendSuccess(wsconn, fmt.Sprintf("Funding request accepted for %s into %s", username, address.Hex())); err != nil {
+		if err = sendSuccess(wsconn, fmt.Sprintf("Funding request accepted for  %s", address.Hex())); err != nil {
 			log.Warn("Failed to send funding success to client", "err", err)
 			return
 		}
@@ -598,202 +536,36 @@ func sendSuccess(conn *wsConn, msg string) error {
 	return send(conn, map[string]string{"success": msg}, time.Second)
 }
 
-// authTwitter tries to authenticate a faucet request using Twitter posts, returning
-// the uniqueness identifier (user id/username), username, avatar URL and Ethereum address to fund on success.
-func authTwitter(url string, tokenV1, tokenV2 string) (string, string, string, common.Address, error) {
-	// Ensure the user specified a meaningful URL, no fancy nonsense
-	parts := strings.Split(url, "/")
-	if len(parts) < 4 || parts[len(parts)-2] != "status" {
-		//lint:ignore ST1005 This error is to be displayed in the browser
-		return "", "", "", common.Address{}, errors.New("Invalid Twitter status URL")
-	}
-	// Strip any query parameters from the tweet id and ensure it's numeric
-	tweetID := strings.Split(parts[len(parts)-1], "?")[0]
-	if !regexp.MustCompile("^[0-9]+$").MatchString(tweetID) {
-		return "", "", "", common.Address{}, errors.New("invalid Tweet URL")
-	}
-	// Twitter's API isn't really friendly with direct links.
-	// It is restricted to 300 queries / 15 minute with an app api key.
-	// Anything more will require read only authorization from the users and that we want to avoid.
-
-	// If Twitter bearer token is provided, use the API, selecting the version
-	// the user would prefer (currently there's a limit of 1 v2 app / developer
-	// but unlimited v1.1 apps).
-	switch {
-	case tokenV1 != "":
-		return authTwitterWithTokenV1(tweetID, tokenV1)
-	case tokenV2 != "":
-		return authTwitterWithTokenV2(tweetID, tokenV2)
-	}
-	// Twiter API token isn't provided so we just load the public posts
-	// and scrape it for the Ethereum address and profile URL. We need to load
-	// the mobile page though since the main page loads tweet contents via JS.
-	url = strings.Replace(url, "https://twitter.com/", "https://mobile.twitter.com/", 1)
-
-	res, err := http.Get(url)
-	if err != nil {
-		return "", "", "", common.Address{}, err
-	}
-	defer res.Body.Close()
-
-	// Resolve the username from the final redirect, no intermediate junk
-	parts = strings.Split(res.Request.URL.String(), "/")
-	if len(parts) < 4 || parts[len(parts)-2] != "status" {
-		//lint:ignore ST1005 This error is to be displayed in the browser
-		return "", "", "", common.Address{}, errors.New("Invalid Twitter status URL")
-	}
-	username := parts[len(parts)-3]
-
-	body, err := ioutil.ReadAll(res.Body)
-	if err != nil {
-		return "", "", "", common.Address{}, err
-	}
-	address := common.HexToAddress(string(regexp.MustCompile("0x[0-9a-fA-F]{40}").Find(body)))
-	if address == (common.Address{}) {
-		//lint:ignore ST1005 This error is to be displayed in the browser
-		return "", "", "", common.Address{}, errors.New("No Ethereum address found to fund")
-	}
-	var avatar string
-	if parts = regexp.MustCompile(`src="([^"]+twimg\.com/profile_images[^"]+)"`).FindStringSubmatch(string(body)); len(parts) == 2 {
-		avatar = parts[1]
-	}
-	return username + "@twitter", username, avatar, address, nil
+type EtherscanResp struct {
+	Status  string `json:"status,omitempty"`
+	Message string `json:"message,omitempty"`
+	Result  string `json:"result,omitempty"`
 }
 
-// authTwitterWithTokenV1 tries to authenticate a faucet request using Twitter's v1
-// API, returning the user id, username, avatar URL and Ethereum address to fund on
-// success.
-func authTwitterWithTokenV1(tweetID string, token string) (string, string, string, common.Address, error) {
-	// Query the tweet details from Twitter
-	url := fmt.Sprintf("https://api.twitter.com/1.1/statuses/show.json?id=%s", tweetID)
-	req, err := http.NewRequest("GET", url, nil)
+func authEtherscan(tokenKey, address string) error {
+	urlStr := fmt.Sprintf("https://api.etherscan.io/api?module=account&action=balance&address=%s&tag=latest&apikey=%s",
+		address, tokenKey)
+	res, err := http.Get(urlStr)
 	if err != nil {
-		return "", "", "", common.Address{}, err
-	}
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", "", "", common.Address{}, err
-	}
-	defer res.Body.Close()
-
-	var result struct {
-		Text string `json:"text"`
-		User struct {
-			ID       string `json:"id_str"`
-			Username string `json:"screen_name"`
-			Avatar   string `json:"profile_image_url"`
-		} `json:"user"`
-	}
-	err = json.NewDecoder(res.Body).Decode(&result)
-	if err != nil {
-		return "", "", "", common.Address{}, err
-	}
-	address := common.HexToAddress(regexp.MustCompile("0x[0-9a-fA-F]{40}").FindString(result.Text))
-	if address == (common.Address{}) {
-		//lint:ignore ST1005 This error is to be displayed in the browser
-		return "", "", "", common.Address{}, errors.New("No Ethereum address found to fund")
-	}
-	return result.User.ID + "@twitter", result.User.Username, result.User.Avatar, address, nil
-}
-
-// authTwitterWithTokenV2 tries to authenticate a faucet request using Twitter's v2
-// API, returning the user id, username, avatar URL and Ethereum address to fund on
-// success.
-func authTwitterWithTokenV2(tweetID string, token string) (string, string, string, common.Address, error) {
-	// Query the tweet details from Twitter
-	url := fmt.Sprintf("https://api.twitter.com/2/tweets/%s?expansions=author_id&user.fields=profile_image_url", tweetID)
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return "", "", "", common.Address{}, err
-	}
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", "", "", common.Address{}, err
-	}
-	defer res.Body.Close()
-
-	var result struct {
-		Data struct {
-			AuthorID string `json:"author_id"`
-			Text     string `json:"text"`
-		} `json:"data"`
-		Includes struct {
-			Users []struct {
-				ID       string `json:"id"`
-				Username string `json:"username"`
-				Avatar   string `json:"profile_image_url"`
-			} `json:"users"`
-		} `json:"includes"`
-	}
-
-	err = json.NewDecoder(res.Body).Decode(&result)
-	if err != nil {
-		return "", "", "", common.Address{}, err
-	}
-
-	address := common.HexToAddress(regexp.MustCompile("0x[0-9a-fA-F]{40}").FindString(result.Data.Text))
-	if address == (common.Address{}) {
-		//lint:ignore ST1005 This error is to be displayed in the browser
-		return "", "", "", common.Address{}, errors.New("No Ethereum address found to fund")
-	}
-	return result.Data.AuthorID + "@twitter", result.Includes.Users[0].Username, result.Includes.Users[0].Avatar, address, nil
-}
-
-// authFacebook tries to authenticate a faucet request using Facebook posts,
-// returning the username, avatar URL and Ethereum address to fund on success.
-func authFacebook(url string) (string, string, common.Address, error) {
-	// Ensure the user specified a meaningful URL, no fancy nonsense
-	parts := strings.Split(strings.Split(url, "?")[0], "/")
-	if parts[len(parts)-1] == "" {
-		parts = parts[0 : len(parts)-1]
-	}
-	if len(parts) < 4 || parts[len(parts)-2] != "posts" {
-		//lint:ignore ST1005 This error is to be displayed in the browser
-		return "", "", common.Address{}, errors.New("Invalid Facebook post URL")
-	}
-	username := parts[len(parts)-3]
-
-	// Facebook's Graph API isn't really friendly with direct links. Still, we don't
-	// want to do ask read permissions from users, so just load the public posts and
-	// scrape it for the Ethereum address and profile URL.
-	//
-	// Facebook recently changed their desktop webpage to use AJAX for loading post
-	// content, so switch over to the mobile site for now. Will probably end up having
-	// to use the API eventually.
-	crawl := strings.Replace(url, "www.facebook.com", "m.facebook.com", 1)
-
-	res, err := http.Get(crawl)
-	if err != nil {
-		return "", "", common.Address{}, err
+		return err
 	}
 	defer res.Body.Close()
 
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
-		return "", "", common.Address{}, err
+		return err
 	}
-	address := common.HexToAddress(string(regexp.MustCompile("0x[0-9a-fA-F]{40}").Find(body)))
-	if address == (common.Address{}) {
-		//lint:ignore ST1005 This error is to be displayed in the browser
-		return "", "", common.Address{}, errors.New("No Ethereum address found to fund")
+	var info EtherscanResp
+	err = json.Unmarshal(body, &info)
+	if err != nil {
+		return err
 	}
-	var avatar string
-	if parts = regexp.MustCompile(`src="([^"]+fbcdn\.net[^"]+)"`).FindStringSubmatch(string(body)); len(parts) == 2 {
-		avatar = parts[1]
+	if info.Message != "OK" {
+		return fmt.Errorf("invalid Etherscan status:%s", info.Result)
 	}
-	return username + "@facebook", avatar, address, nil
-}
+	if info.Result == "0" {
+		return errors.New("the balance on ethereum is 0")
+	}
 
-// authNoAuth tries to interpret a faucet request as a plain Ethereum address,
-// without actually performing any remote authentication. This mode is prone to
-// Byzantine attack, so only ever use for truly private networks.
-func authNoAuth(url string) (string, string, common.Address, error) {
-	address := common.HexToAddress(regexp.MustCompile("0x[0-9a-fA-F]{40}").FindString(url))
-	if address == (common.Address{}) {
-		//lint:ignore ST1005 This error is to be displayed in the browser
-		return "", "", common.Address{}, errors.New("No Ethereum address found to fund")
-	}
-	return address.Hex() + "@noauth", "", address, nil
+	return nil
 }

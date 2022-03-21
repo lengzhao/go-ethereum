@@ -30,13 +30,11 @@ import (
 	"fmt"
 	"html/template"
 	"io/ioutil"
-	"math"
 	"math/big"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -54,21 +52,21 @@ import (
 var (
 	apiPortFlag = flag.Int("apiport", 8080, "Listener port for the HTTP API connection")
 
-	netnameFlag = flag.String("faucet.name", "", "Network name to assign to the faucet")
-	payoutFlag  = flag.Int("faucet.amount", 1, "Number of Ethers to pay out per user request")
-	minutesFlag = flag.Int("faucet.minutes", 1440, "Number of minutes to wait between funding rounds")
-	tiersFlag   = flag.Int("faucet.tiers", 3, "Number of funding tiers to enable (x3 time, x2.5 funds)")
+	netnameFlag = flag.String("faucet.name", "phenix", "Network name to assign to the faucet")
+	payoutFlag  = flag.Int("faucet.amount", 10, "Number of Ethers to pay out per user request")
 
 	accJSONFlag = flag.String("account.json", "", "Key json file to fund user requests with")
 	accPassFlag = flag.String("account.pass", "", "Decryption password to access faucet funds")
 
-	noauthFlag = flag.Bool("noauth", false, "Enables funding requests without authentication")
-	logFlag    = flag.Int("loglevel", 3, "Log level to use for Ethereum and the faucet")
+	logFlag = flag.Int("loglevel", 2, "Log level to use for Ethereum and the faucet")
 
 	etherscanTokenFlag = flag.String("etherscan.token", "", "Bearer token to authenticate with the etherscan API")
 
 	rpcFlag     = flag.String("rpc", "", "the rpc address of node")
-	chainIDFlag = flag.Uint64("chaindID", 1, "chain id")
+	chainIDFlag = flag.Uint64("chaindID", 791, "chain id")
+
+	tlsCrtFlag = flag.String("tls.crt", "", "crt file of https")
+	tlsKeyFlag = flag.String("tls.key", "", "key file of https")
 )
 
 var (
@@ -83,40 +81,10 @@ func main() {
 	flag.Parse()
 	log.Root().SetHandler(log.LvlFilterHandler(log.Lvl(*logFlag), log.StreamHandler(os.Stderr, log.TerminalFormat(true))))
 
-	// Construct the payout tiers
-	amounts := make([]string, *tiersFlag)
-	periods := make([]string, *tiersFlag)
-	for i := 0; i < *tiersFlag; i++ {
-		// Calculate the amount for the next tier and format it
-		amount := float64(*payoutFlag) * math.Pow(2.5, float64(i))
-		amounts[i] = fmt.Sprintf("%s Phenix", strconv.FormatFloat(amount, 'f', -1, 64))
-		if amount == 1 {
-			amounts[i] = strings.TrimSuffix(amounts[i], "s")
-		}
-		// Calculate the period for the next tier and format it
-		period := *minutesFlag * int(math.Pow(3, float64(i)))
-		periods[i] = fmt.Sprintf("%d mins", period)
-		if period%60 == 0 {
-			period /= 60
-			periods[i] = fmt.Sprintf("%d hours", period)
-
-			if period%24 == 0 {
-				period /= 24
-				periods[i] = fmt.Sprintf("%d days", period)
-			}
-		}
-		if period == 1 {
-			periods[i] = strings.TrimSuffix(periods[i], "s")
-		}
-	}
 	// Load up and render the faucet website
 	website := new(bytes.Buffer)
 	err := template.Must(template.New("").Parse(tmpl)).Execute(website, map[string]interface{}{
-		"Network":   *netnameFlag,
-		"Amounts":   amounts,
-		"Periods":   periods,
-		"Recaptcha": "",
-		"NoAuth":    *noauthFlag,
+		"Network": *netnameFlag,
 	})
 	if err != nil {
 		log.Crit("Failed to render the faucet template", "err", err)
@@ -147,7 +115,7 @@ func main() {
 	}
 	defer faucet.close()
 
-	if err := faucet.listenAndServe(*apiPortFlag); err != nil {
+	if err := faucet.listenAndServe(*apiPortFlag, *tlsCrtFlag, *tlsKeyFlag); err != nil {
 		log.Crit("Failed to launch faucet API", "err", err)
 	}
 }
@@ -222,11 +190,14 @@ func (f *faucet) close() error {
 
 // listenAndServe registers the HTTP handlers for the faucet and boots it up
 // for service user funding requests.
-func (f *faucet) listenAndServe(port int) error {
+func (f *faucet) listenAndServe(port int, crt, key string) error {
 	go f.loop()
 
 	http.HandleFunc("/", f.webHandler)
 	http.HandleFunc("/api", f.apiHandler)
+	if crt != "" && key != "" {
+		return http.ListenAndServeTLS(fmt.Sprintf(":%d", port), crt, key, nil)
+	}
 	return http.ListenAndServe(fmt.Sprintf(":%d", port), nil)
 }
 
@@ -324,7 +295,7 @@ func (f *faucet) apiHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		if msg.Tier >= uint(*tiersFlag) {
+		if msg.Tier >= 1 {
 			//lint:ignore ST1005 This error is to be displayed in the browser
 			if err = sendError(wsconn, errors.New("Invalid funding tier requested")); err != nil {
 				log.Warn("Failed to send tier error to client", "err", err)

@@ -788,9 +788,12 @@ func (c *Phenix) checkParentShard(chain consensus.ChainHeaderReader, header *typ
 	defer client.Close()
 
 	var head *types.Header
-	err = client.CallContext(ctx, &head, "proxy_headerByHash", big.NewInt(int64(c.config.ShardID)/2), ps)
-	if err != nil {
-		return err
+	for i := 0; i < 3; i++ {
+		err = client.CallContext(ctx, &head, "proxy_headerByHash", big.NewInt(int64(c.config.ShardID)/2), ps)
+		if err != nil || head == nil {
+			time.Sleep(time.Second)
+			continue
+		}
 	}
 	if head == nil {
 		return fmt.Errorf("not found parent shard")
@@ -889,10 +892,13 @@ func (c *Phenix) checkLeftChildShard(chain consensus.ChainHeaderReader, header *
 	defer client.Close()
 
 	var head *types.Header
-	err = client.CallContext(ctx, &head, "proxy_headerByHash", big.NewInt(int64(c.config.ShardID)*2), cs)
-	if err != nil {
-		c.startShardThread(chain, header, state, big.NewInt(int64(c.config.ShardID)*2))
-		return err
+	for i := 0; i < 3; i++ {
+		err = client.CallContext(ctx, &head, "proxy_headerByHash", big.NewInt(int64(c.config.ShardID)*2), cs)
+		if err != nil || head == nil {
+			c.startShardThread(chain, header, state, big.NewInt(int64(c.config.ShardID)*2))
+			time.Sleep(time.Second)
+			continue
+		}
 	}
 	if head == nil {
 		return fmt.Errorf("not found left child shard")
@@ -986,10 +992,13 @@ func (c *Phenix) checkRightChildShard(chain consensus.ChainHeaderReader, header 
 	defer client.Close()
 
 	var head *types.Header
-	err = client.CallContext(ctx, &head, "proxy_headerByHash", big.NewInt(int64(c.config.ShardID)*2+1), cs)
-	if err != nil {
-		c.startShardThread(chain, header, state, big.NewInt(int64(c.config.ShardID)*2+1))
-		return err
+	for i := 0; i < 3; i++ {
+		err = client.CallContext(ctx, &head, "proxy_headerByHash", big.NewInt(int64(c.config.ShardID)*2+1), cs)
+		if err != nil || head == nil {
+			c.startShardThread(chain, header, state, big.NewInt(int64(c.config.ShardID)*2+1))
+			time.Sleep(time.Second)
+			continue
+		}
 	}
 	if head == nil {
 		return fmt.Errorf("not found right child shard")

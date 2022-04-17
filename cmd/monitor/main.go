@@ -85,7 +85,10 @@ func main() {
 	if exit {
 		return
 	}
-	LoadConfig("./conf.json")
+	err = LoadConfig("./conf.json")
+	if err != nil {
+		log.Crit("error conf.json", "error", err)
+	}
 
 	mgr := NewShardManager(conf)
 	defer mgr.Stop()
